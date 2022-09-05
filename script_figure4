@@ -1,7 +1,8 @@
+
 library("tidyverse")
 
 rm(list=ls())
-set.seed(seed = 28575)
+#set.seed(seed = 28575)
 
 
 ###########################################################
@@ -24,7 +25,8 @@ physical_complexes_tbl %>%
   select(in_deletion_library) %>% 
   distinct()
 
-heterochromatin_screens_tbl<-read_csv("data/screendata_imrS36S37_replacedby_S34S35.csv",
+
+heterochromatin_screens_tbl<-read_csv("data/screens_used_for_correlation_and_growth_plots_SAGA_Set1_Mst2.csv",
                                       col_types = 
                                         cols(
                                           .default = col_double(),
@@ -32,8 +34,6 @@ heterochromatin_screens_tbl<-read_csv("data/screendata_imrS36S37_replacedby_S34S
                                           gene = col_character()
                                         ))
 colnames(heterochromatin_screens_tbl)
-
-
 
 
 
@@ -48,9 +48,6 @@ tbl_strain_wrong2 <- tbl_strain_wrong %>%
   select(systematic_ID)
 strain_wrong <- tbl_strain_wrong2[[1]]
 
-#print(tbl_strain_wrong, n=29)
-
-
 
 heterochromatin_screens_tbl <- heterochromatin_screens_tbl %>% 
   filter(!systematic_ID %in% strain_wrong) 
@@ -62,13 +59,10 @@ heterochromatin_screens_tbl$gene <- gsub("ppm1", "poz1", heterochromatin_screens
 heterochromatin_screens_tbl$systematic_ID <- gsub("SPBP8B7.08c", "SPAC19G12.13c", heterochromatin_screens_tbl$systematic_ID)
 
 
-#write_csv(heterochromatin_screens_tbl, "out_Zsuzsa/screen_data_filtered_and_renamed_imrS36S37_replacedby_S34S35.csv")
-
-
 ##############################
-# Test if the data are consistent  - Eloszor ellenorizzuk, amit tudni velunk az adatokrol
+# Test if the data are consistent  
 
-# Thest if ID columns are unique - Eloszor nezzuk meg, hogy az ID oszlopok egyediek-e
+# Thest if ID columns are unique 
 
 heterochromatin_screens_tbl %>% group_by(systematic_ID) %>%  summarise(n=n()) %>% arrange(desc( n)) 
 heterochromatin_screens_tbl %>% group_by(gene) %>%  summarise(n=n()) %>% arrange(desc( n))
@@ -83,30 +77,27 @@ heterochromatin_screens_tbl %>%
   ungroup() %>%
   arrange(systematic_ID) %>% filter(!grepl("^WT-*", gene))
 
-
 ####################################
 
 physical_complexes_tbl %>%
   group_by(gene, main_chromatin_complexes) %>%
   mutate(n=n()) %>%
   filter(n>=2)
+#################x
+
+
+physical_complexes_tbl %>%
+  filter(!is.na(in_deletion_library)) %>% 
+  anti_join( heterochromatin_screens_tbl, by=c("gene"="gene"))
+
 
 ##################################################################################
 ##################################################################################
 
-# heterochromatin_screens_tbl <- heterochromatin_screens_tbl %>%
-#   mutate(row_idx=sprintf("R%05i",1:n())) %>%  select(row_idx, everything()) # 
 
 ###########
 
-
-
-alternatives_tbl <-    crossing(
-  correlation=c("Pearson"),
-  aggregation_of_replicates=c("median")
-)
-
-
+  
   # long format table
   tbl1<-heterochromatin_screens_tbl %>%
     gather(key="key", value="relative_fitness", -systematic_ID, -gene) 
@@ -137,22 +128,17 @@ alternatives_tbl <-    crossing(
   
   
   ####################################
-  # if(aa$aggregation_of_replicates =="use all")
-  # {
-    # no aggregation, we will use all the values
+  
     tbl1_aggregate_replicates <- heterochromatin_screens_tbl;
     variable_names<- unique(tbl1$key)
     
-  # }else if(aa$aggregation_of_replicates =="mean")
-  # {
-    # I take the 6 average value of the 6×8 replicates 
+ 
     tmp1<-
       tbl1 %>%
       group_by(systematic_ID, gene, heterochromatic_region) %>% 
       summarise(aggregated_rel_fitness=median(URA_minus_FOA, na.rm=TRUE), .groups="drop" ) %>%
       ungroup()
-      #mutate(key=paste0(heterochromatic_region,"_",med)) %>% 
-      #select(-heterochromatic_region) 
+      
     
     tbl1_aggregate_replicates <- tmp1 %>% spread(key="heterochromatic_region", value="aggregated_rel_fitness")
     variable_names<- unique(tmp1$heterochromatic_region)
@@ -163,12 +149,11 @@ alternatives_tbl <-    crossing(
   
   mx1<-tbl1_aggregate_replicates %>%  select(all_of(variable_names)) %>% as.matrix()
   
-  #mx1<-tbl1_aggregate_8_replicates %>%  select(imr_FOA,imr_URA,mat_FOA,mat_URA,tel_FOA,tel_URA) %>% as.matrix()
   
   rownames(mx1)<-tbl1_aggregate_replicates$gene
   
   cm <- cor(t(mx1),method = "pearson" , use="pairwise.complete.obs") # correlation matrix
-  #tmp1<-
+  
   correlation_tbl <- 
     as_tibble( reshape2::melt(cm)) %>%  
     rename(correlation=value) %>% 
@@ -192,10 +177,6 @@ alternatives_tbl <-    crossing(
     mutate(cnt__of_complexes_of_the_gene=n()) %>%
     ungroup()
   
- 
-  
-  
-  
   correlation_tbl2<-correlation_tbl  %>%
     left_join(complex_tbl2 %>% rename(complex1=main_chromatin_complexes, module1=modules), by=c("row_idx1"="gene")) %>% 
     left_join(complex_tbl2 %>% rename(complex2=main_chromatin_complexes, module2=modules), by=c("row_idx2"="gene"))
@@ -214,42 +195,6 @@ alternatives_tbl <-    crossing(
           (! is.na(module1) & !is.na(module2) &  module1==module2)
         )~"in the same complex and module",
       TRUE~relation_of_complexes    ))
-  
-  #write_csv(correlation_tbl2 %>% filter(!is.na(module1) &  !is.na(module2)) , "out_Zsuzsa/correlations_tbl.csv")
-  
-  
-  
-  # write_csv(
-  #   correlation_tbl2 %>%  group_by(relation_of_complexes) %>% summarise(n=n(), .groups="drop"),
-  #   "out_Zsuzsa/num_of_gene_pairs1.csv")
-  
-  
-  correlation_tbl2 %>% ggplot(mapping = aes(x=correlation, color=relation_of_complexes))+
-    geom_vline(xintercept = 0, color="gray")+
-    geom_rug(
-      data = correlation_tbl2 %>%
-        group_by(relation_of_complexes) %>%
-        summarise(mu=mean(correlation, na.rm=TRUE), .groups="drop"),
-      mapping = aes(x=mu))+
-    geom_density()
-    # labs(title = paste(aa, collapse = "\n")  )
-  #ggsave(filename = paste0(out_dir1,"density_plot_of_correlations.pdf") , width = 16, height = 9)
-  
-  plot_a <- correlation_tbl2 %>% 
-    filter(relation_of_complexes %in% c("in the same complex", "in different complexes")) %>% 
-    ggplot(mapping = aes(x=correlation, color=relation_of_complexes))+
-    geom_vline(xintercept = 0, color="gray")+
-    geom_density()+
-    theme_bw()+
-    xlab("deletion mutant correlation")+
-    ylab("frequency density")+
-    theme(axis.title = element_text(size = 6),
-          legend.title = element_blank(),
-          legend.position = c(0.3, 0.8), 
-          legend.key.size = unit(0.1, "cm"),
-          legend.text = element_text(size=6),
-          plot.margin = unit(c(0.5,0.5,1,0.5), "cm"),
-          axis.text = element_text(size = 4))
   
   
 
@@ -270,40 +215,13 @@ alternatives_tbl <-    crossing(
           axis.text = element_text(size = 3))+
     coord_flip()
   
-  #ggsave("out_Zsuzsa/plots_figure4/panel_a.pdf", height = 45, width = 40, units = "mm")
+  #ggsave("out_Zsuzsa/plots_figure4/panel_a_extended_dataset.pdf", height = 45, width = 40, units = "mm")
   
-  correlation_tbl2 %>% 
-    filter(relation_of_complexes %in% c("in the same complex", "in different complexes")) %>% 
-    ggplot(mapping = aes(x=correlation, fill=relation_of_complexes))+
-    geom_vline(xintercept = 0, color="gray")+
-    geom_histogram(breaks=seq(-1,1, by=0.1), alpha=0.5)
-  
-  
-  
-  
-  correlation_tbl2 %>% ggplot(mapping = aes(x=correlation, color=relation_of_complexes_and_modules))+
-    geom_vline(xintercept = 0, color="gray")+
-    geom_rug(
-      data = correlation_tbl2 %>%
-        group_by(relation_of_complexes_and_modules) %>%
-        summarise(mu=mean(correlation, na.rm=TRUE), .groups="drop"),
-      mapping = aes(x=mu))+
-    geom_density()
-    #labs(title = paste(aa, collapse = "\n")  )
-  #ggsave(filename = paste0(out_dir1,"density_plot_of_correlations+modules.pdf") , width = 16, height = 9)
- 
+
   
   ################################################################
   
-  # write_csv(
-  #   correlation_tbl2 %>% filter(relation_of_complexes=="in the same complex") %>%
-  #     group_by(complex1) %>% 
-  #     summarise(average_correlation=mean(correlation) ,
-  #               cnt_of_gene_pairs=n()  ,
-  #               cnt_of_genes=ceiling( sqrt(2*n())),
-  #               .groups="drop"),
-  #   path = paste0(out_dir1,"averange_correlation_values_within_complex.csv")
-  # )
+  
   
   correlation_tbl2 %>% filter(relation_of_complexes_and_modules=="in the same complex and module") %>%
     group_by(complex1, module1) %>% 
@@ -312,60 +230,8 @@ alternatives_tbl <-    crossing(
               cnt_of_genes=ceiling( sqrt(2*n())),
               .groups="drop")
 
-  
-  correlation_tbl2 %>% filter(relation_of_complexes=="in the same complex") %>%
-    ggplot(mapping = aes(x=complex1, y= correlation))+
-    #geom_violin(scale = "count")+
-    stat_summary(fun.data = mean_sdl, 
-                 fun.args = list(mult = 1), 
-                 geom = "pointrange", 
-                 position = position_nudge(0.05)) +
-    geom_dotplot(binaxis = "y", 
-                 dotsize = 1.5, 
-                 stackdir = "up", 
-                 binwidth = 0.025, 
-                 color="gray40",
-                 fill="gray40",
-                 #position = position_nudge(-0.025)
-    )+
-    theme_bw()+
-    theme(axis.text.x = element_text(angle=90, size = 10, hjust = 1, vjust = 0.5),
-          axis.text.y = element_text(size=6),
-          axis.title = element_text(size=8))+
-    theme(legend.position = "none")+
-    ylab("Pearson correlation (median)")+
-    xlab("Physical complexes")
-  #ggsave("out_Zsuzsa/correlation_values_within_complex.pdf" , width = 100, height = 80, units="mm", limitsize = FALSE)
-
-
-
     
   my_y_range<- range(correlation_tbl2$correlation, na.rm = TRUE)
-    
- plot_b <- correlation_tbl2 %>% filter(relation_of_complexes=="in the same complex") %>% 
-   filter(complex1!="Cul4-Ddb1-Cdt2") %>% 
-      ggplot(mapping = aes(x=fct_reorder(complex1, correlation), y= correlation))+
-      geom_dotplot(binaxis = "y", 
-                   dotsize = 1.5, 
-                   stackdir = "up", 
-                   binwidth = 0.025, 
-                   color="gray40",
-                   fill="gray40",
-                   #position = position_nudge(-0.025)
-      )+
-      theme_bw()+
-      theme(axis.text.x = element_text(angle=90, size = 6, hjust = 1, vjust = 0.5),
-            axis.text.y = element_text(size=6),
-            axis.title = element_text(size=6),
-            title = element_text(size = 6))+
-            # plot.margin = unit(c(0.5,1,0,0), "cm"))+
-      theme(legend.position = "none")+
-      xlab("")+
-      ylab("Pearson correlation \n(median)")+
-      labs(title = "Pairs within the same complex")+
-   coord_flip()
-  
-  #ggsave("out_Zsuzsa/correlation_values_within_complex_paper-version.pdf", width = 168, height = 90, units = "mm")
  
  correlation_tbl2 %>% filter(relation_of_complexes=="in the same complex") %>% 
    filter(complex1!="Cul4-Ddb1-Cdt2") %>% 
@@ -389,57 +255,18 @@ alternatives_tbl <-    crossing(
    ylab("Pearson correlation \n(median)")+
    labs(title = "Pairs within the same complex")
   
- #ggsave("out_Zsuzsa/plots_figure4/panel_b.pdf", height = 45, width = 70, units = "mm")
- 
- p_ab <- cowplot::plot_grid( plot_a, plot_b, labels=c("a", "b"), rel_widths = c(1,1.3), rel_heights = c(1,3), ncol=1)
-#ggsave("out_Zsuzsa/figure3ab_URA_minus_FOA_pearson_mean.pdf", width = 250, height = 80, units = "mm" )  
+ #ggsave("out_Zsuzsa/plots_figure4/panel_b_extended_dataset.pdf", height = 45, width = 70, units = "mm")
   
   
   ###################################### correlation heatmaps of complexes ##################################################x
-  # schemes
-  library("magick")
+ 
   
-  scheme_mst2 <- image_read("data/scheme_mst2.png")
-  scheme_SAGA <- image_read("data/scheme_SAGA.png")
-  scheme_Swr <- image_read("data/scheme_Swr.png")
+  tbl_data <- heterochromatin_screens_tbl %>% 
+    select(-systematic_ID)
   
-  #install.packages("ggplotify")
-  library(ggplotify)
+# long format
   
-  scheme_grob_mst2 <- as.grob(scheme_mst2)
-  scheme_grob_SAGA <- as.grob(scheme_SAGA)
-  scheme_grob_Swr <- as.grob(scheme_Swr)
-  
-  tbl_data <- read_csv("data/screenData_selected_Thomas_20211105.csv")
-  tbl_data_wt <- read_csv("data/screendata_imrS36S37_replacedby_S34S35.csv")
-  
-  tbl_data <- tbl_data[,c(2, 309, 3:308)]
-  
-  tbl_subtel <- tbl_data_wt %>%
-    select(systematic_ID, contains("subtel")) %>% 
-    rename(sysID=systematic_ID)
-  
-  tbl_data <- inner_join(tbl_data, tbl_subtel)
-  
-  tbl_data_wt_std <- tbl_data %>% 
-    select(gene, sysID, contains("001.wt")| contains("040.2677.4.1.46.5kb.CRISPR")) %>% 
-      select(gene, sysID, contains("std"))
-  
-  #colnames(tbl_data_wt_std %>% select(contains("tel_URA")))
-  
-  #write_csv(tbl_data_wt_std, "out_Zsuzsa/screens_used_for_correlation_and_growth_plots_SAGA_Set1_Mst2.csv")
-  
-  
-  tbl_data <- tbl_data %>% 
-    select(-sysID)
-  
-  
-  
-  colnames <- colnames(tbl_data)
-  
-  # intersect(list_prefday_URA, colnames)
-  
-  colnames <- colnames(tbl_data[,2:319])
+  colnames <- colnames(tbl_data[,2:105])
   
   tbl_data_long1 <-  tbl_data %>%
     pivot_longer(cols = all_of(colnames), values_to="value")
@@ -471,6 +298,9 @@ alternatives_tbl <-    crossing(
   
   
   tbl_stat <- tbl_data_long2 %>%
+    #filter(value>0) %>%
+    #filter(!gene_locus_readout_secondMutation %in%
+    # c("pdp3_imr_FOA_031.pdp3", "pdp3_imr_URA_031.pdp3")) %>%
     group_by(gene_locus_readout_secondMutation) %>%
     summarise(median=median(value, na.rm=TRUE))
   #
@@ -549,18 +379,12 @@ alternatives_tbl <-    crossing(
   
   p_SAGA_growth <-tbl_data_SAGA %>%
     mutate(label_y=factor(gene, levels = c("ubp8",  "sgf11","sgf29", "ada2", "ngg1", "gcn5" , "spt20",   "tra1"))) %>% 
-    #separate(name, into=c("locus", "readout", "second_mutation", "condition"), sep = "_", remove = FALSE) %>%
     filter(secondMutation=="001.wt"| locus=="subtel") %>% 
     filter(condition %in% c("01.std")) %>% 
-    #unite(col="screen",c("locus", "condition"), sep = " ") %>% 
     ggplot(aes(x=locus, y=label_y, fill=URA_minus_FOA))+
     geom_raster()+
-    #scale_fill_continuous(limits=c(-1, 1))+
     scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "gray50", mid = "white",
                          name = "combined \nFOA/URA score")+
-    # facet_grid(.~factor(screen, levels = c("imr 01.std", "mat 01.std",
-    #                                        "subtel 01.std","tel 01.std")), scales = "free", space = "free")+
-    # #theme_bw()+
     theme(axis.title.x =element_blank() ,
           axis.title.y = element_blank(),
           axis.text.x = element_text(size=6, angle = 90),
@@ -601,10 +425,8 @@ alternatives_tbl <-    crossing(
   correlation_tbl <- correlation_tbl %>%
     mutate(label_x=factor(row_idx1, levels = c("ubp8",  "sgf11","sgf29", "ada2", "ngg1", "gcn5" , "spt20",   "tra1"))) %>%
     mutate(label_y=factor(row_idx2, levels = c("ubp8",  "sgf11","sgf29", "ada2", "ngg1", "gcn5", "spt20",   "tra1")))
-  #
-  # mark the modules
   
-  
+
   p_SAGA <- correlation_tbl %>%
     ggplot(mapping = aes(x=label_x,
                          y=label_y, fill=correlation,
@@ -624,6 +446,7 @@ alternatives_tbl <-    crossing(
           legend.position = "bottom")+
     labs(title="SAGA complex subunits")
   
+  
   correlation_tbl %>%
     ggplot(mapping = aes(x=label_x,
                          y=label_y, fill=correlation,
@@ -636,9 +459,6 @@ alternatives_tbl <-    crossing(
           axis.title.y = element_blank(),
           axis.text.y=element_text(size = 2),
           axis.text.x = element_text(size = 2, angle = 90),
-          # legend.title = element_text(size = 5),
-          # legend.text = element_text(size = 5),
-          # legend.key.size = unit(0.3,"cm"),
           title = element_text(size=2),
           legend.position = "none",
           axis.ticks.x = element_line(size = 0),
@@ -646,7 +466,7 @@ alternatives_tbl <-    crossing(
   
   #ggsave("out_Zsuzsa/plots_figure4/SAGA_correlation.pdf", height = 20, width = 20, units = "mm")
   
-
+  
   correlation_tbl2<-correlation_tbl  %>%
     select(-label_x, -label_y) %>% 
     left_join(complex_tbl2 %>% rename(complex1=main_chromatin_complexes, module1=modules), by=c("row_idx1"="gene")) %>% 
@@ -660,19 +480,6 @@ alternatives_tbl <-    crossing(
             (! is.na(module1) & !is.na(module2) &  module1==module2)
         )~"in the same module",
       TRUE~"in different module"    ))
-  
-  library(ggplot2)
-  library(ggpubr)
-  correlation_tbl2 %>% 
-    filter(row_idx1<row_idx2) %>%
-    ggplot(aes(x=relation_of_modules, y=correlation))+
-    geom_boxplot(outlier.shape = NA)+
-    geom_jitter()+
-    ylab("pairwise correlation")+
-    labs(title="Pairwise correlation of rel. growth profiles\nSAGA complex subunits")+
-    stat_compare_means(method="t.test")
-  
-  
   
   
   ## Mst2 complex ####
@@ -701,7 +508,7 @@ alternatives_tbl <-    crossing(
     rename(correlation=value) %>%
     mutate(row_idx1=as.character(Var1),row_idx2=as.character(Var2)) %>%
     select(-Var1,-Var2)
-  # filter(row_idx1<row_idx2)   # I need only the upper triangular of the correlation matrix
+ 
   
   p_Mst2 <- correlation_tbl %>%
     ggplot(mapping = aes(x=fct_reorder(row_idx1,correlation),
@@ -729,18 +536,12 @@ alternatives_tbl <-    crossing(
   
   p_Mst2_growth <-tbl_data_Mst2 %>%
     mutate(label_y=factor(gene, levels = c("tfg3", "nto1", "ptf2", "eaf6", "pdp3", "ptf1"))) %>% 
-    #separate(name, into=c("locus", "readout", "second_mutation", "condition"), sep = "_", remove = FALSE) %>%
     filter(secondMutation=="001.wt"| locus=="subtel") %>% 
     filter(condition %in% c("01.std")) %>% 
-    #unite(col="screen",c("locus", "condition"), sep = " ") %>% 
     ggplot(aes(x=locus, y=label_y, fill=URA_minus_FOA))+
     geom_raster()+
-    #scale_fill_continuous(limits=c(-1, 1))+
     scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "gray50", mid = "white",
                          name = "combined \nFOA/URA score")+
-    # facet_grid(.~factor(screen, levels = c("imr 01.std", "mat 01.std",
-    #                                        "subtel 01.std","tel 01.std")), scales = "free", space = "free")+
-    # #theme_bw()+
     theme(axis.title.x =element_blank() ,
           axis.title.y = element_blank(),
           axis.text.x = element_text(size=6, angle = 90),
@@ -762,11 +563,8 @@ alternatives_tbl <-    crossing(
                          name = "combined \nFOA/URA score", limits=c(-0.5,1.7))+
     scale_x_discrete(expand = c(0,0))+
     theme(
-      #set thickness of axis ticks
       axis.ticks=element_line(size=0.4),
-      #remove plot background
       plot.background=element_blank(),
-      #remove plot border
       panel.border=element_blank(),
       axis.title.x =element_blank() ,
       axis.title.y = element_blank(),
@@ -783,9 +581,7 @@ alternatives_tbl <-    crossing(
   correlation_tbl <- correlation_tbl %>%
     mutate(label_x=factor(row_idx1, levels = c("tfg3","eaf6", "ptf2", "nto1", "pdp3", "ptf1"))) %>%
     mutate(label_y=factor(row_idx2, levels = c("tfg3","eaf6", "ptf2", "nto1", "pdp3", "ptf1")))
-  # #
-  # mark the modules
-  
+
   
   p_Mst2 <- correlation_tbl %>%
     ggplot(mapping = aes(x=label_x,
@@ -805,15 +601,7 @@ alternatives_tbl <-    crossing(
           title = element_text(size=6),
           legend.position = "bottom")+
     labs(title="Mst2 complex subunits")
-  #labs(title = "Correlation of Mst2 complex subunits\nmating type locus reporter")
-  # # 
-  #install.packages("cowplot")
- #scheme_grob_mst2+theme(plot.margin = unit(c(1,1,1,1), "cm"))
-  
-  p_both_mst2 <- cowplot::plot_grid(scheme_grob_mst2, p_Mst2, p_Mst2_growth,
-                     nrow = 1,
-                     align= "hv", axis = "tb",
-                     rel_widths = c(0.5,0.9,0.75))
+ 
   
   correlation_tbl %>%
     ggplot(mapping = aes(x=label_x,
@@ -827,9 +615,6 @@ alternatives_tbl <-    crossing(
           axis.title.y = element_blank(),
           axis.text.y=element_text(size = 2),
           axis.text.x = element_text(size = 2, angle = 90),
-          # legend.title = element_text(size = 5),
-          # legend.text = element_text(size = 5),
-          # legend.key.size = unit(0.3,"cm"),
           title = element_text(size=2),
           legend.position = "none",
           axis.ticks.x = element_line(size = 0),
@@ -837,296 +622,9 @@ alternatives_tbl <-    crossing(
   
   #ggsave("out_Zsuzsa/plots_figure4/Mst2_correlation.pdf", height = 20, width = 20, units = "mm")
   
-  
-  
-  ## Swr complex ####
-  ## only wt screens (imr, mat, tel)
-  
-  tbl_Swr_complex <- tbl_log2_median_wide %>%
-    filter(gene %in% c("arp6", "swc2", "swc3", "swc5", "swr1", "msc1", "bdf1", "vps71", "yaf9"))
-  #select(gene, contains("FOA"))
-  
-  variable_names <- colnames(tbl_Swr_complex)
-  variable_names <- variable_names[2:5]
-  
-  mx1<-as.matrix((tbl_Swr_complex) %>% select(-gene))
-  
-  #mx1<-tbl1_aggregate_8_replicates %>%  select(imr_FOA,imr_URA,mat_FOA,mat_URA,tel_FOA,tel_URA) %>% as.matrix()
-  
-  rname <- tbl_Swr_complex$gene
-  
-  rownames(mx1) <- rname
-  
-  cm <- cor(t(mx1),method = "pearson" , use="pairwise.complete.obs") # correlation matrix
-  #tmp1<-
-  
-  correlation_tbl <-
-    as_tibble( reshape2::melt(cm)) %>%
-    rename(correlation=value) %>%
-    mutate(row_idx1=as.character(Var1),row_idx2=as.character(Var2)) %>%
-    select(-Var1,-Var2)
-  # filter(row_idx1<row_idx2)   # I need only the upper triangular of the correlation matrix
-  
-  p_Swr <- correlation_tbl %>%
-    ggplot(mapping = aes(x=fct_reorder(row_idx1,correlation),
-                         y=fct_reorder(row_idx2,correlation), fill=correlation,
-                         label=sprintf("%0.2f", correlation)))+
-    geom_raster()+
-    geom_text()+
-    scale_fill_continuous(limits=c(-1, 1))+
-    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
-    theme(axis.title.x =element_blank() , axis.title.y = element_blank())
-  
-  tbl_log2 <- tbl_stat2 %>% 
-    pivot_wider(names_from = readout, values_from = median) %>% 
-    mutate(log2_FOA=log2(FOA), log2_URA=log2(URA)) %>% 
-    mutate(URA_minus_FOA=log2_URA-log2_FOA)
-  
-  tbl_data_Swr <- tbl_log2 %>%
-    filter(condition %in% c("01.std")) %>% 
-    filter(secondMutation=="001.wt"|locus=="subtel") %>%
-    filter(gene %in% c("arp6", "swc2", "swc3", "swc5", "swr1", "msc1", "bdf1", "vps71", "yaf9"))
-  
-  library(hyperSpec)
-  
-  
-  p_Swr_growth <-tbl_data_Swr %>%
-    mutate(label_y=factor(gene, levels = c("bdf1", "yaf9", "vps71", "arp6", "swr1", "msc1", "swc2", "swc5", "swc3"))) %>% 
-    #separate(name, into=c("locus", "readout", "second_mutation", "condition"), sep = "_", remove = FALSE) %>%
-    filter(secondMutation=="001.wt"| locus=="subtel") %>% 
-    filter(condition %in% c("01.std")) %>% 
-    #unite(col="screen",c("locus", "condition"), sep = " ") %>% 
-    ggplot(aes(x=locus, y=label_y, fill=URA_minus_FOA))+
-    geom_raster()+
-    #scale_fill_continuous(limits=c(-1, 1))+
-    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "gray50", mid = "white",
-                         name = "combined \nFOA/URA score")+
-    # facet_grid(.~factor(screen, levels = c("imr 01.std", "mat 01.std",
-    #                                        "subtel 01.std","tel 01.std")), scales = "free", space = "free")+
-    # #theme_bw()+
-    theme(axis.title.x =element_blank() ,
-          axis.title.y = element_blank(),
-          axis.text.x = element_text(size=6, angle = 90),
-          axis.text.y= element_text(size = 6),
-          strip.text.x = element_text(size = 6),
-          legend.title = element_text(size = 5),
-          legend.text = element_text(size = 5),
-          legend.key.size = unit(0.3,"cm"),
-          title = element_text(size=6))+
-    labs(title="Relative growth", size=8)
-  #   
-  
-  
-  
-  tbl_complexes <- read_csv("data/physical_complexes_v7.csv")
-  module_marker_heatmap<-
-    tbl_complexes %>% 
-    filter(!is.na(modules)) %>% 
-    filter(main_chromatin_complexes=="SwrC") %>% 
-    filter(modules %in% c("C-module", "N-module")) %>% 
-    ggplot(mapping = aes(x=modules, fill=modules,y=gene)) +
-    geom_tile(color="black")+
-    scale_fill_manual(values = c("C-module"="#ffd966ff", "N-module"="#e7c19aff"))+
-    scale_y_discrete(limits=c("bdf1", "yaf9", "vps71", "arp6", "swr1", "msc1", "swc2", "swc5", "swc3"),
-                     labels=c("bdf1", "yaf9", "vps71", "arp6", "swr1", "msc1", "swc2", "swc5", "swc3"))+
-    #scale_fill_brewer(palette="YlGn")+
-    theme_void()+
-    theme(axis.text.x = element_text(size=6, angle = 90))+
-    theme(legend.position = "none")
-  
-  p_Swr <- correlation_tbl %>%
-    ggplot(mapping = aes(x=fct_reorder(row_idx1,correlation),
-                         y=fct_reorder(row_idx2,correlation), fill=correlation,
-                         label=sprintf("%0.2f", correlation)))+
-    geom_raster()+
-    geom_text(size=2)+
-    scale_fill_continuous(limits=c(-1, 1))+
-    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
-    theme(axis.title.x =element_blank() ,
-          axis.title.y = element_blank(),
-          axis.text.y=element_text(size = 6),
-          axis.text.x = element_text(size = 6, angle = 90),
-          legend.title = element_text(size = 5),
-          legend.text = element_text(size = 5),
-          legend.key.size = unit(0.3,"cm"),
-          title = element_text(size=6),
-          legend.position = "bottom")+
-    labs(title="SwrC complex subunits")
-  #labs(title = "Correlation of SAGA complex subunits\nmating type locus reporter")
-  # # 
-  #install.packages("cowplot")
-  
-  p_both_Swr <- cowplot::plot_grid(scheme_grob_Swr,module_marker_heatmap, p_Swr, p_Swr_growth,
-                     nrow = 1,
-                     align= "hv", axis = "tb",
-                     rel_widths = c(0.85,0.15,1.3,0.75))
-  
-  
-  p_bottom <- cowplot::plot_grid(scheme_grob_mst2 ,p_Mst2, p_Mst2_growth, scheme_grob_SAGA, p_SAGA, p_SAGA_growth,
-                                 scheme_grob_Swr, p_Swr, p_SAGA_growth,
-                     ncol = 3,
-                     align= "hv", axis = "tb",
-                     rel_widths = c(2, 3, 1.7, 2, 3, 1.7, 2, 3, 1.7),
-                     labels =c( "c", "", "", "d", "", "", "e", "", ""))
-  
-  cowplot::plot_grid(p_top, p_bottom,
-                     ncol=1,
-                     align= "hv", axis = "tb",
-                     rel_heights = c(2,5))
 
-# ggsave("out_Zsuzsa/correlation_matrixes_median.pdf", width = 160, height = 225,
-#        units = "mm")
-
-
-
-# plot RT data ####
-tbl_RT_mst2 <- read_csv("data/RT_Mst2C.csv")
-
-variable_names<- colnames(tbl_RT_mst2 %>% select(-gene, -round)) 
-
-tbl_RT_mst2_log2 <- tbl_RT_mst2 %>% 
-  mutate_at(.vars = variable_names, .funs = funs(log2(.)))
-
-tbl_RT_mst2_log2 <- tbl_RT_mst2_log2 %>% 
-  select(-round) %>% 
-  pivot_longer(cols=c("dg" , "mat3M", "TERRA", "T4-2" , "T4-5",  "IMR", "tlh1" ),names_to = "locus" )
+  # library(hyperSpec)
   
-
-p_RT_Mst2C <- 
-cowplot::plot_grid(
-  
-tbl_RT_mst2_log2 %>% 
-  filter(locus=="IMR") %>% 
-  ggplot(aes(x=factor(gene, levels=c("nto1", "ptf2", "eaf6", "pdp3", "ptf1")), y=value))+
-  geom_point(size=1, color="gray50")+
-  stat_summary(fun.y = median, 
-               fun.ymin = median, 
-               fun.ymax = median, 
-               geom = "crossbar", 
-               width = 0.5,
-               size=0.5) +
-  theme_bw()+
-  theme(axis.text.x = element_blank(),
-        axis.title.x = element_blank(),
-        axis.title.y = element_text(size = 6),
-        axis.text.y=element_text(size = 6))+
-  ylab("IMR transcript level\n(log2, rel. to WT)"),
-  
-  tbl_RT_mst2_log2 %>% 
-    filter(locus=="mat3M") %>% 
-    ggplot(aes(x=factor(gene, levels=c("nto1", "ptf2", "eaf6", "pdp3", "ptf1")), y=value))+
-    geom_point(size=1, color="gray50")+
-    stat_summary(fun.y = median, 
-               fun.ymin = median, 
-               fun.ymax = median, 
-               geom = "crossbar", 
-               width = 0.5,
-               size=0.5) +
-    theme_bw()+
-    theme(axis.text.x = element_blank(),
-          axis.title.x = element_blank(),
-          axis.title.y = element_text(size = 6),
-          axis.text.y=element_text(size = 6))+
-    ylab("mat3M transcript level\n(log2, rel. to WT)"),
-  
-  tbl_RT_mst2_log2 %>% 
-    filter(locus=="TERRA") %>% 
-    ggplot(aes(x=factor(gene, levels=c("nto1", "ptf2", "eaf6", "pdp3", "ptf1")), y=value))+
-    geom_point(size=1, color="gray50")+
-    stat_summary(fun.y = median, 
-               fun.ymin = median, 
-               fun.ymax = median, 
-               geom = "crossbar", 
-               width = 0.5,
-               size=0.5) +
-    theme_bw()+
-    theme(axis.text.x = element_text(size=6, angle = 90),
-          axis.title.x = element_blank(),
-          axis.title.y = element_text(size = 6),
-          axis.text.y=element_text(size = 6))+
-    ylab("TERRA transcript level\n(log2, rel. to WT)"),
-
-ncol=1)
-
-
-tbl_RT_SAGA <- read_csv("data/RT_SAGA_round1-4.csv")
-
-variable_names<- colnames(tbl_RT_SAGA %>% select(-gene, -round)) 
-
-tbl_RT_SAGA_log2 <- tbl_RT_SAGA %>% 
-  mutate_at(.vars = variable_names, .funs = funs(log2(.))) %>% 
-  filter(!gene%in% c("WT", "ada1", "clr4"))
-
-tbl_RT_SAGA_log2_long <- tbl_RT_SAGA_log2 %>% 
-  select(-round) %>% 
-  pivot_longer(cols=c("dg" , "mat3M", "TERRA", "T4-2" , "T4-5",  "IMR", "tlh1" ),names_to = "locus" )
-
-p_RT_SAGA <- cowplot::plot_grid(
-tbl_RT_SAGA_log2_long %>% 
-  filter(locus=="IMR") %>%
-  ggplot(aes(x=factor(gene, levels=c("ubp8", "sgf29", "sgf11", "sgf73", "ada2", "ngg1", "gcn5" , "spt20",   "tra1")), y=value))+
-  geom_point(size=1, color="gray50")+
-  stat_summary(fun.y = median, 
-               fun.ymin = median, 
-               fun.ymax = median, 
-               geom = "crossbar", 
-               width = 0.5,
-               size=0.5) +
-  theme_bw()+
-  theme(axis.text.x = element_blank(),
-        axis.title.x = element_blank(),
-        axis.title.y = element_text(size = 6),
-        axis.text.y=element_text(size = 6))+
-  ylab("IMR transcript level\n(log2, rel. to WT)"),
-
-tbl_RT_SAGA_log2_long %>% 
-  filter(locus=="mat3M") %>%
-  ggplot(aes(x=factor(gene, levels=c("ubp8", "sgf29", "sgf11", "sgf73", "ada2", "ngg1", "gcn5" , "spt20",   "tra1")), y=value))+
-  geom_point(size=1, color="gray50")+
-  stat_summary(fun.y = median, 
-               fun.ymin = median, 
-               fun.ymax = median, 
-               geom = "crossbar", 
-               width = 0.5,
-               size=0.5) +
-  theme_bw()+
-  theme(axis.text.x = element_blank(),
-        axis.title.x = element_blank(),
-        axis.title.y = element_text(size = 6),
-        axis.text.y=element_text(size = 6))+
-  ylab("mat3M transcript level\n(log2, rel. to WT)"),
-
-
-tbl_RT_SAGA_log2_long %>% 
-  filter(locus=="TERRA") %>%
-  ggplot(aes(x=factor(gene, levels=c("ubp8", "sgf29", "sgf11", "sgf73", "ada2", "ngg1", "gcn5" , "spt20",   "tra1")), y=value))+
-  geom_point(size=1, color="gray50")+
-  stat_summary(fun.y = median, 
-               fun.ymin = median, 
-               fun.ymax = median, 
-               geom = "crossbar", 
-               width = 0.5,
-               size=0.5) +
-  theme_bw()+
-  theme(axis.text.x = element_text(size=6, angle = 90),
-        axis.title.x = element_blank(),
-        axis.title.y = element_text(size = 6),
-        axis.text.y=element_text(size = 6))+
-  ylab("TERRA transcript level\n(log2, rel. to WT)"),
-
-ncol = 1)
-
-p_right <- 
-  cowplot::plot_grid(p_SAGA, p_RT_SAGA,scheme_grob_SAGA,
-                     p_Mst2, p_RT_Mst2C, scheme_grob_mst2,
-                     labels = c("c", "d", "e", "f", "g", "h"), 
-                     rel_widths = c(1.3, 1, 1, 1.3, 1, 1))
-
-
-  
-
-
-
 
 ## Set1 complex ####
 
@@ -1138,14 +636,14 @@ tbl_Set1_complex <- tbl_log2_median_wide %>%
   filter(gene %in% (physical_complexes_tbl %>% 
            filter(main_chromatin_complexes=="Set1/COMPASS") %>% 
            pull(gene)))
-#select(gene, contains("FOA"))
+
 
 variable_names <- colnames(tbl_Set1_complex)
 variable_names <- variable_names[2:5]
 
 mx1<-as.matrix((tbl_Set1_complex) %>% select(-gene))
 
-#mx1<-tbl1_aggregate_8_replicates %>%  select(imr_FOA,imr_URA,mat_FOA,mat_URA,tel_FOA,tel_URA) %>% as.matrix()
+
 
 rname <- tbl_Set1_complex$gene
 
@@ -1159,7 +657,7 @@ correlation_tbl <-
   rename(correlation=value) %>%
   mutate(row_idx1=as.character(Var1),row_idx2=as.character(Var2)) %>%
   select(-Var1,-Var2)
-# filter(row_idx1<row_idx2)   # I need only the upper triangular of the correlation matrix
+
 
 p_Set1 <- correlation_tbl %>%
   ggplot(mapping = aes(x=fct_reorder(row_idx1,correlation),
@@ -1199,9 +697,6 @@ correlation_tbl %>%
         axis.title.y = element_blank(),
         axis.text.y=element_text(size = 2),
         axis.text.x = element_text(size = 2, angle = 90),
-        # legend.title = element_text(size = 5),
-        # legend.text = element_text(size = 5),
-        # legend.key.size = unit(0.3,"cm"),
         title = element_text(size=2),
         legend.position = "none",
         axis.ticks.x = element_line(size = 0),
@@ -1220,18 +715,12 @@ library(hyperSpec)
 
 p_Set1_growth <-tbl_data_Set1 %>%
   mutate(label_y=factor(gene, levels = c("swd22", "shg1", "set1", "ash2", "swd3", "spf1", "swd1"))) %>% 
-  #separate(name, into=c("locus", "readout", "second_mutation", "condition"), sep = "_", remove = FALSE) %>%
   filter(secondMutation=="001.wt"| locus=="subtel") %>% 
   filter(condition %in% c("01.std")) %>% 
-  #unite(col="screen",c("locus", "condition"), sep = " ") %>% 
   ggplot(aes(x=locus, y=label_y, fill=URA_minus_FOA))+
   geom_raster()+
-  #scale_fill_continuous(limits=c(-1, 1))+
   scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "gray50", mid = "white",
                        name = "combined \nFOA/URA score")+
-  # facet_grid(.~factor(screen, levels = c("imr 01.std", "mat 01.std",
-  #                                        "subtel 01.std","tel 01.std")), scales = "free", space = "free")+
-  # #theme_bw()+
   theme(axis.title.x =element_blank() ,
         axis.title.y = element_blank(),
         axis.text.x = element_text(size=6, angle = 90),
@@ -1273,8 +762,6 @@ as_ggplot(leg)
 #ggsave("out_Zsuzsa/plots_figure4/legend_growth.pdf", height = 4, width = 13.5, units = "mm")
 
 
-
-
 #   
 tbl_data_Set1 %>%
   mutate(label_y=factor(gene, levels = c("swd22", "shg1", "set1", "ash2", "swd3", "spf1", "swd1"))) %>% 
@@ -1302,86 +789,3 @@ tbl_data_Set1 %>%
 
 #ggsave("out_Zsuzsa/plots_figure4/Set1_growth.pdf", height = 20, width = 13, units = "mm")
 
-
-## Rpd3L complex ####
-
-physical_complexes_tbl %>% 
-  filter(main_chromatin_complexes=="Rpd3L complex") %>% 
-  pull(gene)
-
-tbl_Rpd3L_complex <- tbl_log2_median_wide %>%
-  filter(gene %in% (physical_complexes_tbl %>% 
-                      filter(main_chromatin_complexes=="Rpd3L complex") %>% 
-                      pull(gene)))
-#select(gene, contains("FOA"))
-
-variable_names <- colnames(tbl_Rpd3L_complex)
-variable_names <- variable_names[2:5]
-
-mx1<-as.matrix((tbl_Rpd3L_complex) %>% select(-gene))
-
-#mx1<-tbl1_aggregate_8_replicates %>%  select(imr_FOA,imr_URA,mat_FOA,mat_URA,tel_FOA,tel_URA) %>% as.matrix()
-
-rname <- tbl_Rpd3L_complex$gene
-
-rownames(mx1) <- rname
-
-cm <- cor(t(mx1),method = "pearson" , use="pairwise.complete.obs") # correlation matrix
-#tmp1<-
-
-correlation_tbl <-
-  as_tibble( reshape2::melt(cm)) %>%
-  rename(correlation=value) %>%
-  mutate(row_idx1=as.character(Var1),row_idx2=as.character(Var2)) %>%
-  select(-Var1,-Var2)
-# filter(row_idx1<row_idx2)   # I need only the upper triangular of the correlation matrix
-
-p_Rpd3L <- correlation_tbl %>%
-  ggplot(mapping = aes(x=fct_reorder(row_idx1,correlation),
-                       y=fct_reorder(row_idx2,correlation), fill=correlation,
-                       label=sprintf("%0.2f", correlation)))+
-  geom_raster()+
-  geom_text()+
-  scale_fill_continuous(limits=c(-1, 1))+
-  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
-  theme(axis.title.x =element_blank() ,
-        axis.title.y = element_blank(),
-        axis.text.x = element_text(angle = 90))
-
-correlation_tbl <- correlation_tbl %>%
-  mutate(label_x=factor(row_idx1, levels = c("laf1", "snt1", "cti6", "laf2", "prw1", "rxt3", "hos2" , "png2",   "set3", "rxt2", "dep1"))) %>%
-  mutate(label_y=factor(row_idx2, levels = c("laf1", "snt1", "cti6", "laf2", "prw1", "rxt3", "hos2" , "png2",   "set3", "rxt2", "dep1")))
-#
-p_Rpd3L <- correlation_tbl %>%
-  ggplot(mapping = aes(x=label_x,
-                       y=label_y, fill=correlation,
-                       label=sprintf("%0.2f", correlation)))+
-  geom_raster()+
-  geom_text(size=2)+
-  scale_fill_continuous(limits=c(-1, 1))+
-  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
-  theme(axis.title.x =element_blank() ,
-        axis.title.y = element_blank(),
-        axis.text.y=element_text(size = 6),
-        axis.text.x = element_text(size = 6, angle = 90),
-        legend.title = element_text(size = 5),
-        legend.text = element_text(size = 5),
-        legend.key.size = unit(0.3,"cm"),
-        title = element_text(size=6),
-        legend.position = "bottom")+
-  labs(title="RPD3L complex subunits")
-
-p_ab <- cowplot::plot_grid( plot_a, plot_b, labels=c("a", "b"), rel_widths = c(1,1.3), rel_heights = c(1,2.5), ncol=1)
-
-p_bottom <- 
-  cowplot::plot_grid(p_Set1, p_Rpd3L, p_Swr,scheme_grob_Swr, nrow = 1,
-                     labels = c("i", "j", "k", "l"))
-
-p_top <- cowplot::plot_grid(p_ab, p_right, rel_widths = c(1, 3))
-
-p_together <- cowplot::plot_grid(p_top,p_bottom,  ncol = 1, rel_heights = c(2.5,1))
-
-p_together
-
-# ggsave("out_Zsuzsa/correlation_matrixes_median_v2.pdf", width = 260, height = 270,
-#               units = "mm")
