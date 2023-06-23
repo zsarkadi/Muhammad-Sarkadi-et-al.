@@ -1,13 +1,98 @@
 library(tidyverse)
-#detach(package:plyr)
-setwd("D:/documents/Heterochromatin_screen/analysis/Heterochromatin_screen_R/reproducibility")
+setwd("D:/documents/Heterochromatin_screen/analysis/Heterochromatin_screen_R/clustering_new_figure_3")
 
-tbl_strain_wrong <- read_csv("D:/documents/Heterochromatin_screen/analysis/Heterochromatin_screen_R/input/gene_red_list_v3.csv")
+tbl_strain_wrong <- read_csv("gene_red_list_v3.csv")
 tbl_big <- read_csv("screendata_imrS36S37_replacedby_S34S35.csv")
-tbl_hits <- read_csv("D:/documents/Heterochromatin_screen/analysis/Heterochromatin_screen_R/reproducibility/hits_unique.csv")
-# tbl_genes_forfilter <- read_csv("D:/documents/Heterochromatin_screen/analysis/Heterochromatin_screen_R/input/gene_list_for_figure2_heatmap.csv")
-tbl_RT <- read_csv("D:/documents/Heterochromatin_screen/analysis/Heterochromatin_screen_R/input/gene_list_candidates_RT_fig2b.csv")  
 
+tbl_hits <- read_csv("hits_20221213.csv")
+
+
+# define hits
+
+tbl_hits <- tbl_hits %>% 
+  mutate(hit=case_when(p_value<0.05 & URA_minus_FOA_score>2 ~ TRUE,
+                       TRUE~FALSE))
+
+tbl_hits_2 <- tbl_hits %>% 
+  filter(hit==TRUE) %>% 
+  group_by(gene) %>% 
+  mutate(domain_hits=n()) %>% 
+  ungroup()
+
+# all hits
+tbl_hits %>% 
+  filter(hit==TRUE) %>% 
+  pull(gene) %>% 
+  unique()
+
+tbl_hits_wide <- tbl_hits_2 %>% 
+  select(gene, heterochromatic_region,URA_minus_FOA_score, domain_hits) %>% 
+  pivot_wider(names_from = heterochromatic_region, values_from = URA_minus_FOA_score)
+
+library('UpSetR')
+
+require(ggplot2); require(plyr); require(gridExtra); require(grid);
+
+
+tbl_hits_wide
+
+tbl_hits_wide_2 <- tbl_hits_wide %>% mutate_if(is.numeric, ~1 * (. != 0))
+
+tbl_hits_wide_2[is.na(tbl_hits_wide_2)] <- 0
+
+# combine subtel and tel 
+
+tbl_hits_wide_3 <- tbl_hits_wide_2 %>% 
+  mutate("subtel/tel"=case_when(tel==1|subtel==1~1,
+                                TRUE~0)) %>%
+  select(-tel, -subtel)
+
+tbl_hits_wide_3$domain_hits<- rowSums(tbl_hits_wide_3[, 3:5])
+
+plot_upset <- upset(tbl_hits_wide_2,
+                    sets = c("imr", "mat", "subtel"),
+                    order.by="freq", matrix.color="blue", point.size=5,
+                    sets.bar.color=c("maroon","blue","orange"),
+                    text.scale = c(1.3, 1.3, 1.3, 1.3, 2, 1.3))
+
+pdf("Figures/Upset_plot_v3.pdf", width = 7, height = 5)
+plot_upset
+dev.off()
+
+cluster1_list <- 
+  tbl_hits_wide_3 %>% 
+  filter(imr==1 & mat==1 & `subtel/tel`==1) %>% 
+  pull(gene) %>% 
+  unique()
+
+cluster2_list <- tbl_hits_wide_3 %>% 
+  filter(imr==1 & mat==1 & `subtel/tel`==0) %>%
+  pull(gene)
+
+cluster3_list <- tbl_hits_wide_3 %>% 
+  filter(domain_hits==2) %>% 
+  filter(`subtel/tel`==1 & (imr==1| mat==1)) %>%
+  pull(gene)
+
+cluster4_list <- tbl_hits_wide_3 %>% 
+  filter(domain_hits==1) %>%
+  filter(imr==1 & mat==0 & `subtel/tel`==0 ) %>%
+  pull(gene)
+
+cluster5_list <- tbl_hits_wide_3 %>% 
+  filter(imr==0 & mat==0 & `subtel/tel`==1) %>%
+  pull(gene)
+
+cluster6_list <- tbl_hits_wide_3 %>% 
+  filter(imr==0 & mat==1 & `subtel/tel`==0 ) %>%
+  pull(gene)
+
+
+all_clusters_list <- c(cluster1_list, cluster2_list, cluster3_list, cluster4_list, cluster5_list, cluster6_list)  
+#215
+all_clusters_list %>% 
+  unique()
+#215
 
 
 ##remove contaminated
@@ -18,22 +103,15 @@ tbl_big_wt <- tbl_big %>%
 
 colnames(tbl_big_wt)
 
-
-tbl_big_wt <- tbl_big_wt[,c(1:6, 43:44, 47:48, 7:10, 45:46, 49:50, 11:26,  51:62, 27:42)]
-
 #2968
 
 tbl_strain_wrong <- tbl_strain_wrong %>% 
   filter(!gene %in% c("mug168", "arg5", "SPAC1782.12c"
-))
+  ))
 
 tbl_strain_wrong2 <- tbl_strain_wrong %>% 
   select(systematic_ID)
 strain_wrong <- tbl_strain_wrong2[[1]]
-
-#print(tbl_strain_wrong, n=29)
-
-
 
 tbl_data2 <- tbl_big_wt %>% 
   filter(!systematic_ID %in% strain_wrong) 
@@ -41,31 +119,19 @@ tbl_data2 <- tbl_big_wt %>%
 
 ##rename strains that not correct 
 
-
-
 tbl_data2$gene <- gsub("ppm1", "poz1", tbl_data2$gene )
 tbl_data2$systematic_ID <- gsub("SPBP8B7.08c", "SPAC19G12.13c", tbl_data2$systematic_ID)
 
-
-
 # remove swi6*
 tbl_data2 <- tbl_data2 %>% 
-  filter(!gene %in% c("swi6*", "nup132*"))
+  filter(!gene %in% c("swi6", "nup132"))
 #2967
-
-
-
 
 # remove genes next to mating type locus
 
 tbl_data2 <- tbl_data2 %>% 
   filter(!gene %in% c("SPBC23G7.14", "SPBC1711.09c", "aha1", "emc3", "SPBC16G5.17", "mtd1", "srp40"))
 #2961
-
-tbl_data2 <- tbl_data2[rowSums(is.na(tbl_data2[ ,3:62])) <7, ]
-#2834
-
-
 
 ## log2
 
@@ -81,426 +147,58 @@ library(dplyr)
 
 is.na(tbl_log2) <- sapply(tbl_log2, is.infinite)
 
-#tbl_log2 %>% group_by(gene) %>%  summarise(n=n()) %>% arrange(desc( n))
 
+# cluster 1 ####
+tbl1 <- tbl_log2  %>% 
+  filter(gene %in% cluster1_list)
 
+mx1<-as.matrix(tbl1 %>%
+                 select(-(1), -(2)))
 
-# t-test, median
-
-#long format
-
-colnames2<- colnames(tbl_log2)
-colnames2 <- colnames2[3:62]
-
-tbl_data_long <-  tbl_log2 %>%
-  pivot_longer(cols = all_of(colnames2), values_to="relative growth") %>% 
-  select(-systematic_ID)
-
-tbl_data_long <- tbl_data_long %>%
-  separate(name, into=c("locus", "readout","second_mutation", "condition", "replicate"),
-           sep="_")
-tbl_data_long <- tbl_data_long %>% 
-  separate(replicate, into=c("biol_replicate", "day", "tech_replicate"))
-
-tbl_data_long2 <- tbl_data_long %>%
-  unite(col="gene_locus_readout_secondMutation",gene:second_mutation, remove=FALSE) %>%
-  unite(col="locus_readout_secondMutation", locus:second_mutation, remove=FALSE) %>% 
-  unite(col="gene_locus_readout_secondMutation_biolrep",c(gene:second_mutation,biol_replicate), remove=FALSE)
-
-colnames(tbl_data_long2)
-
-tbl_data_long2_biolrep <- tbl_data_long2 %>% 
-  group_by(gene, locus_readout_secondMutation, gene_locus_readout_secondMutation, gene_locus_readout_secondMutation_biolrep) %>% 
-  summarize(mean_techrep=mean(`relative growth`, na.rm = TRUE)) %>% 
-  distinct()
-
-#t-test, median
-
-median_all <- median(tbl_data_long2_biolrep$mean_techrep, na.rm = TRUE)
-
-tbl_stat <- tbl_data_long2_biolrep %>%
-  mutate(median_all=median_all) %>% 
-  group_by(gene_locus_readout_secondMutation) %>%
-  filter((sum(!is.na(mean_techrep)))>=3) %>%
-  summarise(gene, gene_locus_readout_secondMutation, locus_readout_secondMutation, mean_techrep, pval=t.test(mean_techrep, median_all)$p.value) %>%
-  mutate(qval=p.adjust(pval, method = "fdr"))
-# 
-
-# 
-tbl_stat_signif <- tbl_stat %>%
-  filter((locus_readout_secondMutation=="imr_FOA_001.wt"& pval<=0.01)|
-           (locus_readout_secondMutation=="mat_FOA_001.wt" & pval<=0.01)|
-           (locus_readout_secondMutation=="tel_FOA_001.wt" & pval<=0.01)|
-           (locus_readout_secondMutation=="tel_FOA_040.2677.4.1.46.5kb.CRISPR" & pval<=0.01)|
-           (locus_readout_secondMutation=="imr_URA_001.wt"& pval<=0.01)|
-           (locus_readout_secondMutation=="mat_URA_001.wt" & pval<=0.01)|
-           (locus_readout_secondMutation=="tel_URA_001.wt" & pval<=0.01)|
-          (locus_readout_secondMutation=="tel_URA_040.2677.4.1.46.5kb.CRISPR" & pval<=0.01))
-
-
-gene_list_signif <- tbl_stat_signif %>%
-  pull(gene) %>%
-  unique()
-  
-#combine gene list with original data
-tbl_data_long2_signif <- tbl_data_long2 %>%
-  filter(gene %in% gene_list_signif ) %>%
-  group_by(gene_locus_readout_secondMutation) %>%
-  filter((sum(is.na(`relative growth`)))<=1| gene %in% c("rik1", "ccq1", "cwf14"))%>%
-  summarize(median=median(`relative growth`, na.rm=TRUE))
-
-
-tbl_stat2 <- tbl_data_long2_signif %>%
-  separate(gene_locus_readout_secondMutation, into=c("gene","locus","readout", "secondMutation" ), sep="_")
-tbl_stat3 <- tbl_stat2 %>%
-  unite(col="locus_readout_secondMutation", locus:secondMutation, remove=FALSE)
-
-# tbl_median <- tbl_data_long2_biolrep %>%
-#   select(gene, locus_readout_secondMutation, median)
-
-tbl_median_wide <- tbl_stat3 %>% 
-  select(gene, locus_readout_secondMutation, median) %>% 
-  pivot_wider(names_from=locus_readout_secondMutation, values_from=median)
-
-tbl_median_wide <- tbl_median_wide[rowSums(is.na(tbl_median_wide[ ,2:9])) <1, ]
-
-
-
-# clustering
-
-mx1<-as.matrix(tbl_median_wide %>% select(-(1)))
-
-rname <- tbl_median_wide$gene
+rname <- tbl1$gene
 
 rownames(mx1) <- rname
 
-mx2 <- scale(mx1)
+#mx2 <- scale(mx1)
 
-my_dist_1 <- dist(mx2, method = "euclidean") 
+my_dist_1 <- dist(mx1, method = "euclidean") 
 sum(is.na(my_dist_1))
 
 #as.matrix(my_dist_1) %>% View()
 
 clustering_object1<-hclust(my_dist_1)
-orderer_labels1<-clustering_object1$labels[clustering_object1$order] 
+
 
 #plot(clustering_object1)
 
 dend <- as.dendrogram(clustering_object1)
-row.ord <- order.dendrogram(dend)
+dend_2 <- flip_leaves(dend,leaves1 = c(4,15), leaves2 = c(3,10))
 
-nrow(mx2)
-mat <- matrix(mx2[row.ord,],nrow=589,ncol=8,dimnames=list(rownames(mx2)[row.ord],colnames(mx2)))
-mat.df <- reshape2::melt(mat,value.name="relative growth (selection media)",varnames=c("gene","sample"))
+tanglegram(dend, dend_2)
+row.ord <- order.dendrogram(dend_2)
 
+orderer_labels1<-clustering_object1$labels[row.ord] 
 
-# generate the input for heatmap (individual screens)
-
-mat.df_wide <- mat.df %>% 
-  pivot_wider(names_from = sample,values_from= `relative growth (selection media)`)
-
-# scale the original values
-mx_original<-as.matrix(tbl_log2 %>% select(-(1:2)))
-
-rname <- tbl_log2$gene
-
-rownames(mx_original) <- rname
-
-mx_original_scaled <- scale(mx_original)
-
-#mx_original_scaled %>% View()
-  
-#mat.df_individ <- left_join(mat.df_wide %>% select(gene), tbl_log2) %>% select(-sysID)
-
-mat.df_individ_long <- reshape2::melt(mx_original_scaled,value.name="relative growth (selection media)",varnames=c("gene","sample"))
-
-mat.df_individ_long <- mat.df_individ_long %>% 
-  filter(`relative growth (selection media)`>(-30))
+nrow(mx1)
+mat <- matrix(mx1[row.ord,],nrow=17,ncol=60,dimnames=list(rownames(mx1)[row.ord],colnames(mx1)))
+mat.df <- reshape2::melt(mat,value.name="expr",varnames=c("gene","sample"))
 
 
-## whole heatmap
+## heatmap
 
 require(dendextend)
-gg.dend <- as.ggdend(dend)
+gg.dend <- as.ggdend(dend_2 %>% set("branches_lwd", 0.2))
 dend1.plot <- 
   ggplot(gg.dend,labels=F)+
   scale_y_reverse()+
+  #scale_x_reverse()+
   coord_flip()+
-  theme(plot.margin=unit(c(1,1,1,1),"cm"),
-        axis.text.x=element_text(size=0.2, angle=90))+
-  annotate("text",size=0.2,hjust=1,
-           x=gg.dend$label$x,y=gg.dend$label$y,label=gg.dend$label$label,colour=gg.dend$label$col)
-
-require(ggplot2)
-map1.plot <- 
-  ggplot(mat.df_individ_long,aes(x=sample,y=gene))+
-  geom_raster(aes(fill=`relative growth (selection media)`))+
-  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
-  scale_y_discrete(position="right", limits=orderer_labels1)+
-  # scale_y_discrete(position="right")+
-  theme_bw()+
-  theme(plot.margin=unit(c(1,1,1,-1),"cm"),
-        legend.key=element_blank(),
-        legend.position="right",
-        axis.text.y=element_text(size=0.5),
-        axis.ticks.y=element_blank(),
-        panel.border=element_blank(),
-        strip.background=element_blank(),
-        axis.text.x=element_text(size=1, angle=90),
-        axis.title.x = element_blank(),
-        # legend.text=element_text(size=5),
-        # legend.title=element_blank(),
-        legend.key.size=unit(0.4,"cm"))
-  # labs(fill="relative growth (selection media)")
-
-
-
-require(cowplot)
-plot_grid(dend1.plot, map1.plot, align='h', rel_widths=c(1,1), scale=c(1,0.916))
-#ggsave("D:/documents/Heterochromatin_screen/analysis/Heterochromatin_screen_R/reproducibility/non_filtered_hits_scaled_whole_20210605_p0.01_pluscwf14_imrscreensreplaced.pdf", width=8, height=20, limitsize = FALSE)
-
-
-# cut segments
-library(plyr)
-library(reshape2)
-library(dplyr)
-library(ggplot2)
-library(ggdendro)
-library(gridExtra)
-library(dendextend)
-
-
-sample_names <- colnames(mx_original)
-
-
-# Cut the dendrogram
-# cluster CLRC ####
-full_dend <- dend
-depth_cutoff <- 24
-h_c_cut <- cut(full_dend, h = depth_cutoff)
-dend_cut <- as.dendrogram(h_c_cut$lower[[1]])
-#dend_cut2 <- flip_leaves(dend_cut,leaves1 = c(12,15), leaves2 = c(16,18))
-dend_cut2 <- all_couple_rotations_at_k(dend_cut, k=5)[[2]]
-
-tanglegram(dend_cut, dend_cut2)
-
-
-dend_cut <- hang.dendrogram(dend_cut2)
-# # Format to extend the branches (optional)
-dend_cut <- hang.dendrogram(dend_cut2, hang = -1) 
-dend_data_cut <- dendro_data(dend_cut2)
-
-# Extract the names assigned to the clusters (e.g., "Branch 1", "Branch 2", ...)
-cluster_names <- as.character(dend_data_cut$labels$label)
-# Extract the names of the haplotypes that belong to each group (using
-# the 'labels' function)
-lst_genes_in_clusters <- h_c_cut$lower[[1]] %>% 
-  lapply(labels) 
-
-
-# Setup the data, so that the layout is inverted (this is more 
-# "clear" than simply using coord_flip())
-segment_data <- with(
-  segment(dend_data_cut), 
-  data.frame(x = y, y = x, xend = yend, yend = xend))
-
-# Extract the positions of the clusters (by getting the positions of the 
-# leafs); data is already in the same order as in the cluster name
-cluster_positions <- segment_data[segment_data$xend == 0, "y"]
-cluster_pos_table <- data.frame(y_position = cluster_positions, 
-                                cluster = cluster_names)
-
-# Specify the positions for the genes, accounting for the clusters
-gene_pos_table <- cluster_names %>%
-  ldply(function(ss) data.frame(gene = ss), .id = "cluster") %>%
-  mutate(y_center = nrow(.):1, 
-         height = 1)
-
-# Table to position the samples
-sample_pos_table <- data.frame(sample = sample_names) %>%
-  mutate(x_center = 1:nrow(.), 
-         width = 1)
-
-
-# Neglecting the gap parameters
-heatmap_data <- mx_original_scaled %>% 
-  reshape2::melt(value.name = "relative growth (selection media)", varnames = c("gene", "sample")) %>%
-  right_join(gene_pos_table) %>%
-  left_join(sample_pos_table)
-
-# Limits for the vertical axes (genes / clusters)
-gene_axis_limits <- with(
-  gene_pos_table, 
-  c(min(y_center - 0.5 * height), max(y_center + 0.5 * height))
-) + 
-  0.1 * c(-1, 1) # extra spacing: 0.1
-
-
-
-#### Heatmap plot
-theme_bare <- theme(
-  axis.line = element_blank(), 
-  axis.text.x = element_blank(), 
-  axis.text.y = element_blank(),
-  axis.ticks = element_blank(), 
-  axis.title.x = element_blank(), 
-  axis.title.y = element_blank(), 
-  #axis.ticks.length = unit(0, "lines"), # Error 
-  legend.position = "none", 
-  panel.border = element_blank(), 
-  panel.grid.major = element_blank(), 
-  panel.grid.minor = element_blank()
-)
-
-colnames(heatmap_data)
-
-regexp1<-"^([^_]+)_([^_]+)_([^_]+)_([^_]+)_([^_]+)$"
-heatmap_data2 <- heatmap_data %>% 
-  mutate(medium=gsub(regexp1,"\\2", sample)) %>%
-  mutate(locus=gsub(regexp1,"\\1", sample)) %>%
-  mutate(replicate=gsub(regexp1,"\\5", sample))
-
-heatmap_data2 <- heatmap_data2 %>% 
-  mutate(locus2=case_when(grepl("CRISP", sample)~"subtel",
-         TRUE~locus))
-
-heatmap_data2$locus_f = factor(heatmap_data2$locus2,levels = c("imr", "mat", "subtel", "tel"))
-
-
-list_RT <- tbl_RT %>% 
-  pull(gene)
-
-a <- ifelse(gene_pos_table$gene %in% list_RT, "red", "black")
+  theme(plot.margin = unit(c(1.6, 0, 0, 0), "cm"))
 
 library(ggh4x)
 
-plt_hmap1 <- 
-  ggplot(heatmap_data2,
-         aes(x = x_center, y = y_center, fill = `relative growth (selection media)` , height = height, width = width))+
-  geom_tile()+
-  scale_fill_gradient2(limits = c(-15, 10),low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
-  scale_y_continuous(breaks = gene_pos_table$y_center, 
-                       labels = gene_pos_table$gene,
-                       expand = c(0, 0),
-                       position = "right")+
-  scale_x_continuous(breaks = sample_pos_table$x_center,
-                       # labels = sample_pos_table$sample,
-                       expand = c(0, 0)) +
-  facet_nested(.~locus_f+medium,scales = "free", space = "free")+
-  theme_bw()+
-  theme(axis.text.x = element_blank(),
-                axis.text.y = element_text(size = 8, color=a),
-                axis.title.y = element_blank(),
-                axis.title.x = element_blank(),
-                axis.ticks.x = element_blank(),
-                # margin: top, right, bottom, and left
-                plot.margin = unit(c(0, 1.4, 0, 0), "cm"),
-        strip.background=element_rect(color="gray50", fill = "gray90"),
-        strip.text.x = element_text(size = 9),
-        panel.spacing=unit(0, "mm"),
-        panel.border=element_rect(color="gray70"))
-
-
-
-
-
-plt_dendr1 <- ggplot(segment_data) + 
-  geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) + 
-  scale_x_reverse(expand = c(0, 0.5)) + 
-  scale_y_reverse()+
-  labs(x = "Distance", y = "", colour = "", size = "") +
-  theme_bw() + 
-  theme_bare+
-  theme(plot.margin = unit(c(1.15, -0.1, 0, 0), "cm"))
-
-
-library(cowplot)
-plot_grid(plt_dendr1, plt_hmap1, align = 'h', rel_widths = c(0.3, 1), scale=c(1.06,1))
-#ggsave("segments_for_publication/wt_individual_screens_20210421_cluster_main1.pdf", width=15, height=15, limitsize = FALSE)
-
-
-# cluster dhm2 ####
-full_dend <- dend
-depth_cutoff <- 12
-h_c_cut <- cut(full_dend, h = depth_cutoff)
-dend_cut <- as.dendrogram(h_c_cut$lower[[4]])
-dend_cut2 <- all_couple_rotations_at_k(dend_cut, k=16)[[2]]
-
-tanglegram(dend_cut, dend_cut2)
-
-dend_cut <- hang.dendrogram(dend_cut2)
-# # Format to extend the branches (optional)
-dend_cut <- hang.dendrogram(dend_cut2, hang = -1) 
-dend_data_cut <- dendro_data(dend_cut2)
-
-# Extract the names assigned to the clusters (e.g., "Branch 1", "Branch 2", ...)
-cluster_names <- as.character(dend_data_cut$labels$label)
-# Extract the names of the haplotypes that belong to each group (using
-# the 'labels' function)
-lst_genes_in_clusters <- h_c_cut$lower[[4]] %>% 
-  lapply(labels) 
-
-
-# Setup the data, so that the layout is inverted (this is more 
-# "clear" than simply using coord_flip())
-segment_data <- with(
-  segment(dend_data_cut), 
-  data.frame(x = y, y = x, xend = yend, yend = xend))
-
-# Extract the positions of the clusters (by getting the positions of the 
-# leafs); data is already in the same order as in the cluster name
-cluster_positions <- segment_data[segment_data$xend == 0, "y"]
-cluster_pos_table <- data.frame(y_position = cluster_positions, 
-                                cluster = cluster_names)
-
-# Specify the positions for the genes, accounting for the clusters
-gene_pos_table <- cluster_names %>%
-  ldply(function(ss) data.frame(gene = ss), .id = "cluster") %>%
-  mutate(y_center = nrow(.):1, 
-         height = 1)
-
-
-# Table to position the samples
-sample_pos_table <- data.frame(sample = sample_names) %>%
-  mutate(x_center = 1:nrow(.), 
-         width = 1)
-
-
-# Neglecting the gap parameters
-heatmap_data <- mx_original_scaled %>% 
-  reshape2::melt(value.name = "relative growth (selection media)", varnames = c("gene", "sample")) %>%
-  right_join(gene_pos_table) %>%
-  left_join(sample_pos_table)
-
-# Limits for the vertical axes (genes / clusters)
-gene_axis_limits <- with(
-  gene_pos_table, 
-  c(min(y_center - 0.5 * height), max(y_center + 0.5 * height))
-) + 
-  0.1 * c(-1, 1) # extra spacing: 0.1
-
-
-
-#### Heatmap plot
-theme_bare <- theme(
-  axis.line = element_blank(), 
-  axis.text.x = element_blank(), 
-  axis.text.y = element_blank(),
-  axis.ticks = element_blank(), 
-  axis.title.x = element_blank(), 
-  axis.title.y = element_blank(), 
-  #axis.ticks.length = unit(0, "lines"), # Error 
-  legend.position = "none", 
-  panel.border = element_blank(), 
-  panel.grid.major = element_blank(), 
-  panel.grid.minor = element_blank(),
-  panel.background=element_blank(),
-  plot.background = element_blank()
-)
-
-colnames(heatmap_data)
-
-heatmap_data2 <- heatmap_data %>% 
+regexp1<-"^([^_]+)_([^_]+)_([^_]+)_([^_]+)_([^_]+)$"
+heatmap_data2 <- mat.df %>% 
   mutate(medium=gsub(regexp1,"\\2", sample)) %>%
   mutate(locus=gsub(regexp1,"\\1", sample)) %>%
   mutate(replicate=gsub(regexp1,"\\5", sample))
@@ -511,82 +209,409 @@ heatmap_data2 <- heatmap_data2 %>%
 
 heatmap_data2$locus_f = factor(heatmap_data2$locus2,levels = c("imr", "mat", "subtel", "tel"))
 
-a <- ifelse(gene_pos_table$gene %in% list_RT, "red", "black")
-
-#install.packages("hyperSpec")
-#library(hyperSpec)
-
-# rename sap14* to sap14
-gene_pos_table$gene <- gsub('sap14\\*', 'sap14', gene_pos_table$gene)
-
-plt_hmap2 <- 
-  ggplot(heatmap_data2,
-         aes(x = x_center, y = y_center, fill = `relative growth (selection media)` , height = height, width = width))+
-  geom_tile()+
-  scale_fill_gradient2(limits = c(-15, 10),low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
-  scale_y_continuous(breaks = gene_pos_table$y_center, 
-                     labels = gene_pos_table$gene,
-                     expand = c(0, 0),
-                     position = "right")+
-  scale_x_continuous(breaks = sample_pos_table$x_center,
-                     # labels = sample_pos_table$sample,
-                     expand = c(0, 0)) +
-    #facet_nested(.~locus_f+medium,scales = "free", space = "free")+
-    facet_grid(.~paste(locus_f,medium),scales = "free", space = "free")+
-    theme_bw()+
+require(ggplot2)
+map1.plot <- 
+  ggplot(heatmap_data2,aes(x=sample,y=gene))+
+  geom_raster(aes(fill=expr))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
+  scale_y_discrete(position="right", limits=orderer_labels1)+
+  facet_nested(.~locus_f+medium,scales = "free", space = "free")+
+  theme_bw()+
   theme(axis.text.x = element_blank(),
-        axis.text.y = element_text(size = 8, color=a),
+        axis.text.y = element_text(size = 6),
         axis.title.y = element_blank(),
         axis.title.x = element_blank(),
         axis.ticks.x = element_blank(),
         # margin: top, right, bottom, and left
-        #plot.margin = unit(c(-1.25, 0, 0.3, -0.1), "cm"),
-        plot.margin = unit(c(0,0.15,0,0), "cm"),
-        strip.background=element_blank(),
-        strip.text = element_blank(),
+        plot.margin = unit(c(0, 1.4, 0.1, 0), "cm"),
+        strip.background=element_rect(color="gray50", fill = "gray90"),
+        strip.text.x = element_text(size = 9),
         panel.spacing=unit(0, "mm"),
-        panel.border=element_rect(color="grey70"))
+        panel.border=element_rect(color="gray70"))+
+  labs(fill="relative growth")
 
 
+require(cowplot)
+plot_grid(dend1.plot, map1.plot, align='h', rel_widths=c(0.2,1), scale=c(1.14,1))
+#ggsave("Figures/cluster1.pdf", width=10, height=3.5, limitsize = FALSE)
 
 
+# cluster 2 ####
 
-plt_dendr2 <- ggplot(segment_data) + 
-  geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) + 
-  scale_x_reverse(expand = c(0, 0.5)) + 
+tbl2 <- tbl_log2  %>% 
+  filter(gene %in% cluster2_list)
+
+mx1<-as.matrix(tbl2 %>%
+                 select(-(1), -(2)))
+
+rname <- tbl2$gene
+
+rownames(mx1) <- rname
+
+my_dist_1 <- dist(mx1, method = "euclidean") 
+sum(is.na(my_dist_1))
+
+clustering_object1<-hclust(my_dist_1)
+orderer_labels1<-clustering_object1$labels[clustering_object1$order] 
+
+
+dend <- as.dendrogram(clustering_object1)
+row.ord <- order.dendrogram(dend)
+
+nrow(mx1)
+mat <- matrix(mx1[row.ord,],nrow=22,ncol=60,dimnames=list(rownames(mx1)[row.ord],colnames(mx1)))
+mat.df <- reshape2::melt(mat,value.name="expr",varnames=c("gene","sample"))
+
+
+## heatmap
+
+gg.dend <- as.ggdend(dend %>% set("branches_lwd", 0.2))
+dend2.plot <- 
+  ggplot(gg.dend,labels=F)+
   scale_y_reverse()+
-  labs(x = "Distance", y = "", colour = "", size = "") +
-  theme_bare+
-  theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))
+  coord_flip()+
+  theme(plot.margin = unit(c(0.2, 0, -0.25, 0), "cm"))
 
 
-library(cowplot)
-plot_grid(plt_dendr2, plt_hmap2, align = 'h', rel_widths = c(0.3, 1), scale=c(1.06,1))
+regexp1<-"^([^_]+)_([^_]+)_([^_]+)_([^_]+)_([^_]+)$"
+heatmap_data2 <- mat.df %>% 
+  mutate(medium=gsub(regexp1,"\\2", sample)) %>%
+  mutate(locus=gsub(regexp1,"\\1", sample)) %>%
+  mutate(replicate=gsub(regexp1,"\\5", sample))
+
+heatmap_data2 <- heatmap_data2 %>% 
+  mutate(locus2=case_when(grepl("CRISP", sample)~"subtel",
+                          TRUE~locus))
+
+heatmap_data2$locus_f = factor(heatmap_data2$locus2,levels = c("imr", "mat", "subtel", "tel"))
+
+map2.plot <- 
+  ggplot(heatmap_data2,aes(x=sample,y=gene))+
+  geom_raster(aes(fill=expr))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
+  scale_y_discrete(position="right", limits=orderer_labels1)+
+  facet_nested(.~locus_f+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(0.1, 1.4, 0.1, 0), "cm"),
+        #strip.background=element_rect(color="gray50", fill = "gray90"),
+        strip.text.x = element_blank(),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"))
 
 
+require(cowplot)
+plot_grid(dend2.plot, map2.plot, align='h', rel_widths=c(0.2,1), scale=c(1.14,1))
+#ggsave("Figures/cluster2.pdf", width=10, height=4.5, limitsize = FALSE)
+
+# cluster3 ####
+
+tbl3 <- tbl_log2  %>% 
+  filter(gene %in% cluster3_list)
+
+mx1<-as.matrix(tbl3 %>%
+                 select(-(1), -(2)))
 
 
+rname <- tbl3$gene
 
-my_legend <- get_legend(plt_hmap1 +
-                          theme(legend.position="bottom",
-                        legend.margin = unit(c(2,2,2,2), "cm"),
-                         legend.title = element_text(size=8),
-                        legend.key.height = unit(0.4, 'cm'), 
-                        legend.key.width = unit(0.6, 'cm'),
-                        legend.text = element_text(size=8)))
-               # megszerzem a legend-et
+rownames(mx1) <- rname
 
-heatmap1_V2<-plt_hmap1 + theme(legend.position="none")
-heatmap2_V2<-plt_hmap2 + theme(legend.position="none")
+my_dist_1 <- dist(mx1, method = "euclidean") 
+sum(is.na(my_dist_1))
+
+clustering_object1<-hclust(my_dist_1)
+orderer_labels1<-clustering_object1$labels[clustering_object1$order] 
+
+dend <- as.dendrogram(clustering_object1)
+row.ord <- order.dendrogram(dend)
+
+nrow(mx1)
+mat <- matrix(mx1[row.ord,],nrow=28,ncol=60,dimnames=list(rownames(mx1)[row.ord],colnames(mx1)))
+mat.df <- reshape2::melt(mat,value.name="expr",varnames=c("gene","sample"))
 
 
-combi1<-cowplot::plot_grid( plt_dendr1, heatmap1_V2, nrow=1, align='h', rel_widths = c(0.2, 1), scale=c(1,1))
-combi2<-cowplot::plot_grid( plt_dendr2, heatmap2_V2, nrow=1, align = 'h', rel_widths = c(0.2, 1), scale=c(1.08,1))
+## heatmap
+
+require(dendextend)
+gg.dend <- as.ggdend(dend%>% set("branches_lwd", 0.2))
+dend3.plot <- 
+  ggplot(gg.dend,labels=F)+
+  scale_y_reverse()+
+  coord_flip()+
+  theme(plot.margin = unit(c(0.2, 0, -0.25, 0), "cm"))
 
 
-big_plot<-cowplot::plot_grid(combi1, combi2 ,my_legend, align = "v", ncol=1, rel_heights=c(14,40, 4)
-                             # rel_widths=c(1, 1, 1, 1, 1)
-                             )
+regexp1<-"^([^_]+)_([^_]+)_([^_]+)_([^_]+)_([^_]+)$"
+heatmap_data2 <- mat.df %>% 
+  mutate(medium=gsub(regexp1,"\\2", sample)) %>%
+  mutate(locus=gsub(regexp1,"\\1", sample)) %>%
+  mutate(replicate=gsub(regexp1,"\\5", sample))
+
+heatmap_data2 <- heatmap_data2 %>% 
+  mutate(locus2=case_when(grepl("CRISP", sample)~"subtel",
+                          TRUE~locus))
+
+heatmap_data2$locus_f = factor(heatmap_data2$locus2,levels = c("imr", "mat", "subtel", "tel"))
+
+require(ggplot2)
+map3.plot <- 
+  ggplot(heatmap_data2,aes(x=sample,y=gene))+
+  geom_raster(aes(fill=expr))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
+  scale_y_discrete(position="right", limits=orderer_labels1)+
+  facet_nested(.~locus_f+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(0.1, 1.4, 0.1, 0), "cm"),
+        strip.background=element_rect(color="gray50", fill = "gray90"),
+        strip.text.x = element_blank(),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"))
+
+plot_grid(dend3.plot, map3.plot, align='h', rel_widths=c(0.2,1), scale=c(1.14,1))
+#ggsave("Figures/cluster3.pdf", width=10, height=4.5, limitsize = FALSE)
+
+# cluster 4 ####
+
+tbl4 <- tbl_log2  %>% 
+  filter(gene %in% cluster4_list)
+
+mx1<-as.matrix(tbl4 %>%
+                 select(-(1), -(2)))
+
+rname <- tbl4$gene
+
+rownames(mx1) <- rname
+
+my_dist_1 <- dist(mx1, method = "euclidean") 
+sum(is.na(my_dist_1))
+
+clustering_object1<-hclust(my_dist_1)
+orderer_labels1<-clustering_object1$labels[clustering_object1$order] 
+
+dend <- as.dendrogram(clustering_object1)
+row.ord <- order.dendrogram(dend)
+
+nrow(mx1)
+mat <- matrix(mx1[row.ord,],nrow=41,ncol=60,dimnames=list(rownames(mx1)[row.ord],colnames(mx1)))
+mat.df <- reshape2::melt(mat,value.name="expr",varnames=c("gene","sample"))
+
+
+## heatmap
+
+gg.dend <- as.ggdend(dend%>% set("branches_lwd", 0.2))
+dend4.plot <- 
+  ggplot(gg.dend,labels=F)+
+  scale_y_reverse()+
+  coord_flip()+
+   theme(plot.margin = unit(c(0.2, 0, -0.25, 0), "cm"))
+
+
+regexp1<-"^([^_]+)_([^_]+)_([^_]+)_([^_]+)_([^_]+)$"
+heatmap_data2 <- mat.df %>% 
+  mutate(medium=gsub(regexp1,"\\2", sample)) %>%
+  mutate(locus=gsub(regexp1,"\\1", sample)) %>%
+  mutate(replicate=gsub(regexp1,"\\5", sample))
+
+heatmap_data2 <- heatmap_data2 %>% 
+  mutate(locus2=case_when(grepl("CRISP", sample)~"subtel",
+                          TRUE~locus))
+
+heatmap_data2$locus_f = factor(heatmap_data2$locus2,levels = c("imr", "mat", "subtel", "tel"))
+
+map4.plot <- 
+  ggplot(heatmap_data2,aes(x=sample,y=gene))+
+  geom_raster(aes(fill=expr))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
+  scale_y_discrete(position="right", limits=orderer_labels1)+
+  facet_nested(.~locus_f+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(0.1, 1.4, 0.1, 0), "cm"),
+        strip.background=element_rect(color="gray50", fill = "gray90"),
+        strip.text.x = element_blank(),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"))
+
+plot_grid(dend4.plot, map4.plot, align='h', rel_widths=c(0.2,1), scale=c(1.14,1))
+#ggsave("Figures/cluster4.pdf", width=10, height=5.5, limitsize = FALSE)
+
+# cluster 5 ####
+
+tbl5 <- tbl_log2  %>% 
+  filter(gene %in% cluster5_list)
+
+mx1<-as.matrix(tbl5 %>%
+                 select(-(1), -(2)))
+
+rname <- tbl5$gene
+
+rownames(mx1) <- rname
+
+my_dist_1 <- dist(mx1, method = "euclidean") 
+sum(is.na(my_dist_1))
+
+clustering_object1<-hclust(my_dist_1)
+orderer_labels1<-clustering_object1$labels[clustering_object1$order] 
+
+dend <- as.dendrogram(clustering_object1)
+row.ord <- order.dendrogram(dend)
+
+nrow(mx1)
+mat <- matrix(mx1[row.ord,],nrow=50,ncol=60,dimnames=list(rownames(mx1)[row.ord],colnames(mx1)))
+mat.df <- reshape2::melt(mat,value.name="expr",varnames=c("gene","sample"))
+
+
+## heatmap
+
+gg.dend <- as.ggdend(dend%>% set("branches_lwd", 0.2))
+dend5.plot <- 
+  ggplot(gg.dend,labels=F)+
+  scale_y_reverse()+
+  coord_flip()+
+  theme(plot.margin = unit(c(0.2, 0, -0.25, 0), "cm"))
+
+
+regexp1<-"^([^_]+)_([^_]+)_([^_]+)_([^_]+)_([^_]+)$"
+heatmap_data2 <- mat.df %>% 
+  mutate(medium=gsub(regexp1,"\\2", sample)) %>%
+  mutate(locus=gsub(regexp1,"\\1", sample)) %>%
+  mutate(replicate=gsub(regexp1,"\\5", sample))
+
+heatmap_data2 <- heatmap_data2 %>% 
+  mutate(locus2=case_when(grepl("CRISP", sample)~"subtel",
+                          TRUE~locus))
+
+heatmap_data2$locus_f = factor(heatmap_data2$locus2,levels = c("imr", "mat", "subtel", "tel"))
+
+map5.plot <- 
+  ggplot(heatmap_data2,aes(x=sample,y=gene))+
+  geom_raster(aes(fill=expr))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
+  scale_y_discrete(position="right", limits=orderer_labels1)+
+  facet_nested(.~locus_f+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(0.1, 1.4, 0.1, 0), "cm"),
+        strip.background=element_rect(color="gray50", fill = "gray90"),
+        strip.text.x = element_blank(),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"))
+
+plot_grid(dend5.plot, map5.plot, align='h', rel_widths=c(0.2,1), scale=c(1.14,1))
+#ggsave("Figures/cluster5.pdf", width=10, height=5.5, limitsize = FALSE)
+
+# cluster 6 ####
+
+tbl6 <- tbl_log2  %>% 
+  filter(gene %in% cluster6_list)
+
+mx1<-as.matrix(tbl6 %>%
+                 select(-(1), -(2)))
+
+rname <- tbl6$gene
+
+rownames(mx1) <- rname
+
+my_dist_1 <- dist(mx1, method = "euclidean") 
+sum(is.na(my_dist_1))
+
+clustering_object1<-hclust(my_dist_1)
+orderer_labels1<-clustering_object1$labels[clustering_object1$order] 
+
+dend <- as.dendrogram(clustering_object1)
+row.ord <- order.dendrogram(dend)
+
+nrow(mx1)
+mat <- matrix(mx1[row.ord,],nrow=57,ncol=60,dimnames=list(rownames(mx1)[row.ord],colnames(mx1)))
+mat.df <- reshape2::melt(mat,value.name="expr",varnames=c("gene","sample"))
+
+
+## heatmap
+
+gg.dend <- as.ggdend(dend%>% set("branches_lwd", 0.2))
+dend6.plot <- 
+  ggplot(gg.dend,labels=F)+
+  scale_y_reverse()+
+  coord_flip()+
+  theme(plot.margin = unit(c(0.2, 0, -0.25, 0), "cm"))
+
+
+regexp1<-"^([^_]+)_([^_]+)_([^_]+)_([^_]+)_([^_]+)$"
+heatmap_data2 <- mat.df %>% 
+  mutate(medium=gsub(regexp1,"\\2", sample)) %>%
+  mutate(locus=gsub(regexp1,"\\1", sample)) %>%
+  mutate(replicate=gsub(regexp1,"\\5", sample))
+
+heatmap_data2 <- heatmap_data2 %>% 
+  mutate(locus2=case_when(grepl("CRISP", sample)~"subtel",
+                          TRUE~locus))
+
+heatmap_data2$locus_f = factor(heatmap_data2$locus2,levels = c("imr", "mat", "subtel", "tel"))
+
+map6.plot <- 
+  ggplot(heatmap_data2,aes(x=sample,y=gene))+
+  geom_raster(aes(fill=expr))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
+  scale_y_discrete(position="right", limits=orderer_labels1)+
+  facet_nested(.~locus_f+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(0.1, 1.4, 0.1, 0), "cm"),
+        strip.background=element_rect(color="gray50", fill = "gray90"),
+        strip.text.x = element_blank(),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"))
+
+plot_grid(dend6.plot, map6.plot, align='h', rel_widths=c(0.2,1), scale=c(1.14,1))
+#ggsave("Figures/cluster6.pdf", width=10, height=5.5, limitsize = FALSE)
+
+
+# together ####
+
+my_legend <- get_legend(map1.plot + theme(legend.position="top"))  # megszerzem a legend-et
+heatmap1_V2<-map1.plot + theme(legend.position="none", axis.text.y = element_blank(), axis.ticks = element_blank() )
+heatmap2_V2<-map2.plot + theme(legend.position="none", axis.text.y = element_blank(), axis.ticks = element_blank())
+heatmap3_V2<-map3.plot + theme(legend.position="none", axis.text.y = element_blank(), axis.ticks = element_blank())
+heatmap4_V2<-map4.plot + theme(legend.position="none", axis.text.y = element_blank(), axis.ticks = element_blank())
+heatmap5_V2<-map5.plot + theme(legend.position="none", axis.text.y = element_blank(), axis.ticks = element_blank())
+heatmap6_V2<-map6.plot + theme(legend.position="none", axis.text.y = element_blank(), axis.ticks = element_blank())# a 2-es verziorol torlom a legend-et
+
+combi1<-cowplot::plot_grid( dend1.plot, heatmap1_V2, nrow=1, align='h', rel_widths = c(0.2, 1), scale=c(1.25,1))
+combi2<-cowplot::plot_grid( dend2.plot, heatmap2_V2, nrow=1, align = 'h', rel_widths = c(0.2, 1), scale=c(1.1,1))
+combi3<-cowplot::plot_grid( dend3.plot, heatmap3_V2, nrow=1, align = 'h', rel_widths = c(0.2, 1), scale=c(1.1,1))
+combi4<-cowplot::plot_grid( dend4.plot, heatmap4_V2, nrow=1, align = 'h', rel_widths = c(0.2, 1), scale=c(1.1,1))
+combi5<-cowplot::plot_grid( dend5.plot, heatmap5_V2, nrow=1, align = 'h', rel_widths = c(0.2, 1), scale=c(1.1,1))
+combi6<-cowplot::plot_grid( dend6.plot, heatmap6_V2, nrow=1, align = 'h', rel_widths = c(0.2, 1), scale=c(1.1,1))
+
+big_plot<-cowplot::plot_grid(combi1, combi2, combi3 ,combi4, combi5, combi6, ncol=1, rel_heights=c(24, 22, 28,41,50, 57))
+
 print(big_plot)
-ggsave(big_plot, file="segments_for_publication/together_v6.pdf", width=140, height=190, unit="mm")
+ggsave(big_plot, file="Figures/together_v3.pdf", width=110, height=230, unit="mm")
 
