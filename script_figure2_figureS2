@@ -160,11 +160,13 @@ for(treshold in 2:5){
   tmp<-
     tbl1 %>% 
     mutate(hit=is.finite(p_value) & p_value<0.05 & URA_minus_FOA_score>treshold  ) %>%   #& URA>0 & FOA<0
+    mutate(known_silencing_factor=case_when(known_HC_factor=="silencing factor"~TRUE,
+                                            TRUE~FALSE)) %>%
     group_by(heterochromatic_region) %>% 
     summarise(hit_cnt=sum(hit),
-              hit_and_known_HC_factor_cnt=sum(hit & is_silencing_factor),
-              number_of_known_silencing_factor=sum(is_silencing_factor),
-              recall=sum(is_known_HC_factor & hit)/sum(is_silencing_factor)
+              hit_and_known_HC_factor_cnt=sum(hit & known_silencing_factor),
+              number_of_known_silencing_factor=sum(known_silencing_factor),
+              recall=sum(known_silencing_factor & hit)/sum(known_silencing_factor)
               recall_based_on_qPCR_ura4=sum(qPCR_ura4>1.5 & hit , na.rm=TRUE)/sum(qPCR_ura4>1.5 , na.rm=TRUE),
               precision_based_on_qPCR_ura4=sum(qPCR_ura4>1.5 & hit , na.rm=TRUE)/sum(hit & is.finite(qPCR_ura4)),
               hit_and_has_qPCR_ura4_cnt=sum(hit & is.finite(qPCR_ura4)),
