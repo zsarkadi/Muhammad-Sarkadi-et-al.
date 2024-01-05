@@ -1,0 +1,1278 @@
+library("tidyverse")
+library(ggpubr)
+library(hyperSpec)
+
+rm(list=ls())
+#set.seed(seed = 28575)
+
+setwd("D:/documents/Heterochromatin_screen/analysis/Heterochromatin_screen_R/PUBLICATION")
+
+tbl_gene_IDs_names <- read_tsv("gene_IDs_names.tsv", skip = 1, col_names = TRUE) # gene names downloaded from pombase on 2023_08_15
+
+###########################################################
+
+
+physical_complexes_tbl <- read_csv("data/Physical_complexes_20230817.csv",
+                                   col_types = cols(
+                                     gene = col_character(),
+                                     main_chromatin_complexes = col_character(),
+                                     in_deletion_library = col_character(),
+                                     physical_interactions = col_character(),
+                                     modules = col_character()
+                                   ))
+physical_complexes_tbl <-physical_complexes_tbl %>%
+  mutate(in_deletion_library=case_when(
+    in_deletion_library=="#N/A"~as.character(NA),
+    TRUE~in_deletion_library))
+
+physical_complexes_tbl %>% 
+  select(in_deletion_library) %>% 
+  distinct()
+
+
+heterochromatin_screens_tbl<-read_csv("data/screens_used_for_correlation_and_growth_plots_SAGA_Set1_Mst2.csv",
+                                      col_types = 
+                                        cols(
+                                          .default = col_double(),
+                                          systematic_ID = col_character(),
+                                          gene = col_character()
+                                        ))
+colnames(heterochromatin_screens_tbl)
+
+# update gene names and add sysID ####
+
+heterochromatin_screens_tbl %>% 
+  filter(grepl("\\*", gene)) %>% 
+  pull(gene)
+
+heterochromatin_screens_tbl <- heterochromatin_screens_tbl %>% 
+  mutate(gene_with_star=case_when(grepl("\\*", gene)~"star",
+                                  TRUE~"non_star"))
+
+
+heterochromatin_screens_tbl$gene <- sub("[\\*-]$", "", heterochromatin_screens_tbl$gene)
+heterochromatin_screens_tbl$systematic_ID <- sub("[\\*-]$", "", heterochromatin_screens_tbl$systematic_ID)
+
+
+heterochromatin_screens_tbl_2 <- left_join(heterochromatin_screens_tbl %>% select(-gene), tbl_gene_IDs_names %>% select(-synonyms) %>% rename(systematic_ID=gene_systematic_id)) %>% 
+  rename(gene=gene_name)
+
+# put stars back
+
+heterochromatin_screens_tbl_2 <- heterochromatin_screens_tbl_2 %>% 
+  mutate(gene=case_when(gene_with_star=="star"~paste0(gene, "*"),
+                        TRUE~gene)) %>% 
+  mutate(systematic_ID=case_when(gene_with_star=="star"~paste0(systematic_ID, "*"),
+                                 TRUE~systematic_ID)) %>% 
+  select(-gene_with_star)
+
+colnames(heterochromatin_screens_tbl_2)
+
+heterochromatin_screens_tbl_2 <- heterochromatin_screens_tbl_2[,c(106,1,2:105)]
+
+heterochromatin_screens_tbl_2 <- heterochromatin_screens_tbl_2 %>% 
+  mutate(gene=case_when(is.na(gene)~systematic_ID,
+                        TRUE~gene))
+heterochromatin_screens_tbl_2 %>% 
+  filter(is.na(systematic_ID))
+
+heterochromatin_screens_tbl_2 %>% 
+  filter(is.na(gene))
+
+
+
+
+tbl_strain_wrong <- read_csv("gene_red_list_v3.csv")
+#tbl_strains_rename <- read_csv("data/gene_list_to_rename.csv")
+
+tbl_strain_wrong <- tbl_strain_wrong %>% 
+  filter(!gene %in% c("mug168", "arg5", "SPAC1782.12c"
+  ))
+
+tbl_strain_wrong2 <- tbl_strain_wrong %>% 
+  select(systematic_ID)
+strain_wrong <- tbl_strain_wrong2[[1]]
+
+
+heterochromatin_screens_tbl_2 <- heterochromatin_screens_tbl_2 %>% 
+  filter(!systematic_ID %in% strain_wrong) 
+#2985
+
+##rename strains that not correct 
+
+heterochromatin_screens_tbl_2$gene <- gsub("ppm1", "poz1*", heterochromatin_screens_tbl_2$gene )
+heterochromatin_screens_tbl_2$systematic_ID <- gsub("SPBP8B7.08c", "SPAC19G12.13c*", heterochromatin_screens_tbl_2$systematic_ID)
+
+#write_csv(heterochromatin_screens_tbl_2, "DataDerived/screens_used_for_correlation_and_growth_plots_SAGA_Set1_Mst2_updated_gene_names.csv")
+
+
+##############################
+# Test if the data are consistent  
+
+heterochromatin_screens_tbl <- heterochromatin_screens_tbl_2
+
+# Thest if ID columns are unique 
+
+heterochromatin_screens_tbl %>% group_by(systematic_ID) %>%  summarise(n=n()) %>% arrange(desc( n)) 
+heterochromatin_screens_tbl %>% group_by(gene) %>%  summarise(n=n()) %>% arrange(desc( n))
+
+heterochromatin_screens_tbl %>% group_by(systematic_ID,gene) %>%  summarise(n=n()) %>% arrange(desc( n)) 
+
+
+# I test if systematic_ID==NA only if WT strains
+heterochromatin_screens_tbl %>%
+  group_by(systematic_ID) %>%
+  filter(n()>=2) %>%
+  ungroup() %>%
+  arrange(systematic_ID) %>% filter(!grepl("^WT-*", gene))
+
+####################################
+
+physical_complexes_tbl %>%
+  group_by(gene, main_chromatin_complexes) %>%
+  mutate(n=n()) %>%
+  filter(n>=2)
+#################x
+
+
+physical_complexes_tbl %>%
+  filter(!is.na(in_deletion_library)) %>% 
+  anti_join( heterochromatin_screens_tbl, by=c("gene"="gene"))
+
+
+##################################################################################
+##################################################################################
+
+
+###########
+
+  
+  # long format table
+  tbl1<-heterochromatin_screens_tbl %>%
+    gather(key="key", value="relative_fitness", -systematic_ID, -gene) 
+  
+  regexp1<-"^([^_]+)_([^_]+)_(.+)$"
+  tbl1 <- tbl1 %>%
+    mutate(log2_value=log2(relative_fitness)) %>% 
+    mutate(
+      heterochromatic_region=gsub(regexp1,"\\1", key),
+      medium=gsub(regexp1,"\\2", key),
+      rest_of_key=gsub(regexp1,"\\3", key)     
+    ) %>% 
+      select(-relative_fitness) %>% 
+    pivot_wider(names_from ="medium", values_from=log2_value, -key) %>% 
+    mutate(URA_minus_FOA=URA-FOA)
+  
+  #hits table
+  tbl_hits <- read_csv("DataDerived/hits_updated_names.csv")
+  tbl_hits <- tbl_hits %>% 
+    mutate(hit_or_not=case_when(p_value<0.05 & URA_minus_FOA_score>2~"hit",
+                                TRUE~"not hit")) %>% 
+    select(gene, heterochromatic_region, hit_or_not)
+  hits <- tbl_hits %>% 
+    filter(hit_or_not=="hit") %>% 
+    select(-heterochromatic_region) %>% 
+    distinct() %>% 
+    pull(gene)
+  
+  
+  ####################################
+  
+    tbl1_aggregate_replicates <- heterochromatin_screens_tbl;
+    variable_names<- unique(tbl1$key)
+    
+ 
+    tmp1<-
+      tbl1 %>%
+      group_by(systematic_ID, gene, heterochromatic_region) %>% 
+      summarise(aggregated_rel_fitness=median(URA_minus_FOA, na.rm=TRUE), .groups="drop" ) %>%
+      ungroup()
+      
+    
+    tbl1_aggregate_replicates <- tmp1 %>% spread(key="heterochromatic_region", value="aggregated_rel_fitness")
+    variable_names<- unique(tmp1$heterochromatic_region)
+    
+    
+  
+  
+  
+  mx1<-tbl1_aggregate_replicates %>%  select(all_of(variable_names)) %>% as.matrix()
+  
+  
+  rownames(mx1)<-tbl1_aggregate_replicates$gene
+  
+  cm <- cor(t(mx1),method = "pearson" , use="pairwise.complete.obs") # correlation matrix
+  
+  correlation_tbl <- 
+    as_tibble( reshape2::melt(cm)) %>%  
+    rename(correlation=value) %>% 
+    mutate(row_idx1=as.character(Var1),row_idx2=as.character(Var2)) %>% 
+    select(-Var1,-Var2) %>% 
+    filter(row_idx1<row_idx2)   # I need only the upper triangular of the correlation matrix
+  
+ 
+  ############################
+  
+  complex_tbl2 <- 
+    physical_complexes_tbl %>%
+    filter(!is.na(in_deletion_library)) %>%
+    select(main_chromatin_complexes , gene, modules) 
+  
+  # checck consistency
+  stopifnot(complex_tbl2 %>% nrow()==complex_tbl2 %>% distinct() %>% nrow()) # no duplicated rows
+  
+  complex_tbl2<- complex_tbl2 %>%
+    group_by(gene) %>%
+    mutate(cnt__of_complexes_of_the_gene=n()) %>%
+    ungroup()
+  
+  correlation_tbl2<-correlation_tbl  %>%
+    left_join(complex_tbl2 %>% rename(complex1=main_chromatin_complexes, module1=modules), by=c("row_idx1"="gene")) %>% 
+    left_join(complex_tbl2 %>% rename(complex2=main_chromatin_complexes, module2=modules), by=c("row_idx2"="gene"))
+  
+  correlation_tbl2<-correlation_tbl2  %>%                                
+    mutate(relation_of_complexes= case_when(
+      !is.na(complex1) &  !is.na(complex2) & complex1==complex2~"in the same complex",
+      !is.na(complex1) &  !is.na(complex2) & complex1!=complex2~"in different complexes",
+      is.na(complex1)+is.na(complex2)==1 ~ "one in complex, the other not",
+      is.na(complex1) & is.na(complex2)==1 ~ "not in complex",
+      TRUE~"ERROR")) %>% 
+    mutate(relation_of_complexes_and_modules= case_when(
+      !is.na(complex1) &  !is.na(complex2) & complex1==complex2 &  
+        ( 
+          (is.na(module1) & is.na(module2)) |
+          (! is.na(module1) & !is.na(module2) &  module1==module2)
+        )~"in the same complex and module",
+      TRUE~relation_of_complexes    ))
+  
+  
+
+    correlation_tbl2 %>% 
+    filter(relation_of_complexes %in% c("in the same complex", "in different complexes")) %>%
+    ggplot(mapping = aes(x=correlation, color=relation_of_complexes))+
+    geom_vline(xintercept = 0, color="gray")+
+    geom_density()+
+    theme_bw()+
+    xlab("Profile similarity between mutants\n(Pearson correlation coefficient)")+
+    ylab("frequency density")+
+    theme(axis.title = element_text(size = 4),
+          legend.title = element_blank(),
+          legend.position = "bottom" ,
+          legend.key.size = unit(2, "mm"),
+          legend.text = element_text(size=3),
+          #plot.margin = unit(c(0.5,0.5,1,0.5), "cm"),
+          axis.text = element_text(size = 3))+
+    coord_flip()
+  
+  #ggsave("Figures/plots_figure4/panel_a_extended_dataset.pdf", height = 45, width = 40, units = "mm")
+    
+    correlation_tbl2_filt <-  correlation_tbl2 %>% 
+      filter(relation_of_complexes %in% c("in the same complex", "in different complexes"))
+    
+    #write_csv(correlation_tbl2_filt, "DataDerived/correlation_tbl_figure4a.csv")
+  
+
+  
+  ################################################################
+  
+  
+  
+  correlation_tbl2 %>% filter(relation_of_complexes_and_modules=="in the same complex and module") %>%
+    group_by(complex1, module1) %>% 
+    summarise(average_correlation=mean(correlation) ,
+              cnt_of_gene_pairs=n()  ,
+              cnt_of_genes=ceiling( sqrt(2*n())),
+              .groups="drop")
+
+    
+  my_y_range<- range(correlation_tbl2$correlation, na.rm = TRUE)
+ 
+ correlation_tbl2 %>% filter(relation_of_complexes=="in the same complex") %>% 
+   filter(complex1!="Cul4-Ddb1-Cdt2") %>% 
+   ggplot(mapping = aes(x=fct_reorder(complex1, desc(correlation)), y= correlation))+
+   geom_dotplot(binaxis = "y", 
+                dotsize = 1.5, 
+                stackdir = "up", 
+                binwidth = 0.025, 
+                color="gray40",
+                fill="gray40",
+                #position = position_nudge(-0.025)
+   )+
+   theme_bw()+
+   theme(axis.text.x = element_text(angle=90, size = 4, hjust = 1, vjust = 0.5),
+         axis.text.y = element_text(size=3),
+         axis.title = element_text(size=4),
+         title = element_text(size = 4))+
+   # plot.margin = unit(c(0.5,1,0,0), "cm"))+
+   theme(legend.position = "none")+
+   xlab("")+
+   ylab("Profile similarity between mutants\n(Pearson correlation coefficient)")+
+   labs(title = "Pairs within the same complex")
+  
+ #ggsave("Figures/plots_figure4/panel_b_extended_dataset.pdf", height = 45, width = 70, units = "mm")
+  
+  
+  ###################################### correlation heatmaps of complexes ##################################################x
+ 
+  
+  tbl_data <- heterochromatin_screens_tbl %>% 
+    select(-systematic_ID)
+  
+# long format
+  
+  colnames <- colnames(tbl_data[,2:105])
+  
+  tbl_data_long1 <-  tbl_data %>%
+    pivot_longer(cols = all_of(colnames), values_to="value")
+  
+  sum(is.na(tbl_data_long1))
+  
+  
+  tbl_data_long1[tbl_data_long1 <= 0] <- NA
+  
+  sum(is.na(tbl_data_long1))
+  
+  
+  tbl_data_long <- tbl_data_long1 %>%
+    separate(name, into=c("locus", "readout","second_mutation", "condition", "replicate"),
+             sep="_", remove = FALSE)
+  
+  # filter wt screens, standard condition
+  
+  tbl_data_long_wt <- tbl_data_long %>%
+    filter(second_mutation=="001.wt"| second_mutation=="040.2677.4.1.46.5kb.CRISPR")%>% 
+    filter(condition=="01.std")
+  
+  
+  tbl_data_long2 <- tbl_data_long_wt %>%
+    select(gene, locus, readout, second_mutation, condition, value) %>% 
+    unite(col="gene_locus_readout_secondMutation",gene:condition, remove=FALSE) %>%
+    unite(col="locus_readout_secondMutation", locus:condition, remove=FALSE)
+  #filter(second_mutation %in% c("001.wt", "040.spc19", "031.pdp3" ))
+  
+  
+  tbl_stat <- tbl_data_long2 %>%
+    #filter(value>0) %>%
+    #filter(!gene_locus_readout_secondMutation %in%
+    # c("pdp3_imr_FOA_031.pdp3", "pdp3_imr_URA_031.pdp3")) %>%
+    group_by(gene_locus_readout_secondMutation) %>%
+    summarise(median=median(value, na.rm=TRUE))
+  #
+  tbl_stat2 <- tbl_stat %>%
+    separate(gene_locus_readout_secondMutation, into=c("gene","locus","readout", "secondMutation", "condition" ), sep="_")
+  tbl_stat3 <- tbl_stat2 %>%
+    unite(col="locus_readout_secondMutation", locus:condition, remove=FALSE)
+  
+  tbl_log2_median <- tbl_stat3 %>%
+    mutate(log2_median=log2(median)) %>% 
+    select(gene, locus_readout_secondMutation, log2_median)
+  
+  # URA minus FOA value
+  tbl_stat4 <- tbl_stat2 %>% 
+    pivot_wider(names_from = readout, values_from = median) %>% 
+    mutate(log2_FOA=log2(FOA), log2_URA=log2(URA)) %>% 
+    mutate(URA_minus_FOA=log2_URA-log2_FOA) %>% 
+    unite(col="locus_readout_secondMutation", locus:condition, remove=FALSE) %>% 
+    select(gene, locus_readout_secondMutation, URA_minus_FOA)
+  
+  tbl_log2_median_wide <- tbl_stat4 %>% pivot_wider(names_from=locus_readout_secondMutation, values_from=URA_minus_FOA)
+  
+  is.na(tbl_log2_median_wide) <- sapply(tbl_log2_median_wide, is.infinite)
+  
+  
+  ## SAGA complex ####
+  ## only wt screens (imr, mat, tel)
+  
+  tbl_SAGA_complex <- tbl_log2_median_wide %>%
+    filter(gene %in% c("sgf11", "ubp8", "ada2", "sgf73", "gcn5", "ngg1", "sgf29", "spt20", "tra1"))
+  #select(gene, contains("FOA"))
+  
+  variable_names <- colnames(tbl_SAGA_complex)
+  variable_names <- variable_names[2:5]
+  
+  mx1<-as.matrix((tbl_SAGA_complex) %>% select(-gene))
+  
+  #mx1<-tbl1_aggregate_8_replicates %>%  select(imr_FOA,imr_URA,mat_FOA,mat_URA,tel_FOA,tel_URA) %>% as.matrix()
+  
+  rname <- tbl_SAGA_complex$gene
+  
+  rownames(mx1) <- rname
+  
+  cm <- cor(t(mx1),method = "pearson" , use="pairwise.complete.obs") # correlation matrix
+  #tmp1<-
+  
+  correlation_tbl <-
+    as_tibble( reshape2::melt(cm)) %>%
+    rename(correlation=value) %>%
+    mutate(row_idx1=as.character(Var1),row_idx2=as.character(Var2)) %>%
+    select(-Var1,-Var2)
+  # filter(row_idx1<row_idx2)   # I need only the upper triangular of the correlation matrix
+  
+  p_SAGA <- correlation_tbl %>%
+    ggplot(mapping = aes(x=fct_reorder(row_idx1,correlation),
+                         y=fct_reorder(row_idx2,correlation), fill=correlation,
+                         label=sprintf("%0.2f", correlation)))+
+    geom_raster()+
+    geom_text()+
+    scale_fill_continuous(limits=c(-1, 1))+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
+    theme(axis.title.x =element_blank() , axis.title.y = element_blank())
+  
+  tbl_log2 <- tbl_stat2 %>% 
+    pivot_wider(names_from = readout, values_from = median) %>% 
+    mutate(log2_FOA=log2(FOA), log2_URA=log2(URA)) %>% 
+    mutate(URA_minus_FOA=log2_URA-log2_FOA)
+  
+  tbl_data_SAGA <- tbl_log2 %>%
+    filter(condition %in% c("01.std")) %>% 
+    filter(secondMutation=="001.wt"|locus=="subtel") %>%
+    filter(gene %in% c("sgf11", "ubp8",  "sgf73", "ada2", "gcn5", "ngg1", "sgf29", "spt20", "tra1"))
+  
+  library(hyperSpec)
+  
+  
+  p_SAGA_growth <-tbl_data_SAGA %>%
+    mutate(label_y=factor(gene, levels = c("ubp8",  "sgf11","sgf29", "sgf73", "ada2", "ngg1", "gcn5" , "spt20",   "tra1"))) %>% 
+    filter(secondMutation=="001.wt"| locus=="subtel") %>% 
+    filter(condition %in% c("01.std")) %>% 
+    ggplot(aes(x=locus, y=label_y, fill=URA_minus_FOA))+
+    geom_raster()+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "gray50", mid = "white",
+                         name = "combined \nFOA/URA score")+
+    theme(axis.title.x =element_blank() ,
+          axis.title.y = element_blank(),
+          axis.text.x = element_text(size=6, angle = 90),
+          axis.text.y= element_text(size = 6),
+          strip.text.x = element_text(size = 6),
+          legend.title = element_text(size = 5),
+          legend.text = element_text(size = 5),
+          legend.key.size = unit(0.3,"cm"),
+          title = element_text(size=6))+
+    labs(title="Relative growth", size=8)
+  #   
+  tbl_data_SAGA %>%
+    mutate(label_y=factor(gene, levels = c("ubp8",  "sgf11","sgf29", "sgf73" ,"ada2", "ngg1", "gcn5" , "spt20","tra1"))) %>% 
+    filter(secondMutation=="001.wt"| locus=="subtel") %>% 
+    filter(condition %in% c("01.std")) %>% 
+    ggplot(aes(x=locus, y=label_y, fill=URA_minus_FOA))+
+    geom_tile()+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "gray50", mid = "white",
+                         name = "combined \nFOA/URA score", limits=c(-0.5,1.7))+
+    scale_x_discrete(expand = c(0,0))+
+    theme(
+      #set thickness of axis ticks
+      axis.ticks=element_line(size=0.4),
+      #remove plot background
+      plot.background=element_blank(),
+      #remove plot border
+      panel.border=element_blank(),
+      axis.title.x =element_blank() ,
+      axis.title.y = element_blank(),
+      axis.text.x = element_text(vjust=0.3, size=5, angle = 90),
+      axis.text.y = element_text(size=5),
+      legend.position = "none",
+      axis.ticks.x = element_line(size = 0),
+      axis.ticks.length=unit(0,"mm"),
+      panel.background = element_blank())
+    
+  #ggsave("out_Zsuzsa/plots_figure4/SAGA_growth_with_sgf73_geom_tile.pdf", height = 34, width = 20, units = "mm")
+  #ggsave("out_Zsuzsa/plots_figure4/SAGA_growth.png", height = 34, width = 20, units = "mm")
+  #ggsave("out_Zsuzsa/plots_figure4/SAGA_growth.jpg", height = 34, width = 20, units = "mm")
+
+  
+  correlation_tbl <- correlation_tbl %>%
+    mutate(label_x=factor(row_idx1, levels = c("ubp8",  "sgf11","sgf29", "sgf73", "ada2", "ngg1", "gcn5" , "spt20",   "tra1"))) %>%
+    mutate(label_y=factor(row_idx2, levels = c("ubp8",  "sgf11","sgf29",  "sgf73", "ada2", "ngg1", "gcn5", "spt20",   "tra1")))
+  
+
+  p_SAGA <- correlation_tbl %>%
+    ggplot(mapping = aes(x=label_x,
+                         y=label_y, fill=correlation,
+                         label=sprintf("%0.2f", correlation)))+
+    geom_raster()+
+    geom_text(size=2)+
+    scale_fill_continuous(limits=c(-1, 1))+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
+    theme(axis.title.x =element_blank() ,
+          axis.title.y = element_blank(),
+          axis.text.y=element_text(size = 6),
+          axis.text.x = element_text(size = 6, angle = 90),
+          legend.title = element_text(size = 5),
+          legend.text = element_text(size = 5),
+          legend.key.size = unit(0.3,"cm"),
+          title = element_text(size=6),
+          legend.position = "bottom")+
+    labs(title="SAGA complex subunits")
+  
+  
+  correlation_tbl %>%
+    ggplot(mapping = aes(x=label_x,
+                         y=label_y, fill=correlation,
+                         #label=sprintf("%0.2f", correlation)
+                         ))+
+    geom_tile()+
+    #geom_text(size=0.5)+
+    scale_fill_continuous(limits=c(-1, 1))+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-1, 1))+
+    theme(axis.title.x =element_blank() ,
+          axis.title.y = element_blank(),
+          axis.text.y=element_text(size = 5),
+          axis.text.x = element_text(size = 5, angle = 90),
+          title = element_text(size=2),
+          legend.position = "none",
+          axis.ticks.x = element_line(size = 0),
+          axis.ticks.length=unit(0,"mm"),
+          panel.background = element_blank())
+    
+  
+  #ggsave("out_Zsuzsa/plots_figure4/SAGA_correlation_with_sgf73_geom_tile.pdf", height = 34, width = 34, units = "mm")
+ 
+  
+  correlation_tbl2<-correlation_tbl  %>%
+    select(-label_x, -label_y) %>% 
+    left_join(complex_tbl2 %>% rename(complex1=main_chromatin_complexes, module1=modules), by=c("row_idx1"="gene")) %>% 
+    left_join(complex_tbl2 %>% rename(complex2=main_chromatin_complexes, module2=modules), by=c("row_idx2"="gene"))
+  
+  correlation_tbl2<-correlation_tbl2  %>%                                
+    mutate(relation_of_modules= case_when(
+      !is.na(complex1) &  !is.na(complex2) & complex1==complex2 &  
+        ( 
+          (is.na(module1) & is.na(module2)) |
+            (! is.na(module1) & !is.na(module2) &  module1==module2)
+        )~"in the same module",
+      TRUE~"in different module"    ))
+  
+  
+  ## Mst2 complex ####
+  ## only wt screens (imr, mat, tel)
+  
+  tbl_Mst2_complex <- tbl_log2_median_wide %>%
+    filter(gene %in% c("pdp3", "ptf1", "ptf2", "nto1", "eaf6", "mst2", "tfg3"))
+  #select(gene, contains("FOA"))
+  
+  variable_names <- colnames(tbl_Mst2_complex)
+  variable_names <- variable_names[2:5]
+  
+  mx1<-as.matrix((tbl_Mst2_complex) %>% select(-gene))
+  
+  #mx1<-tbl1_aggregate_8_replicates %>%  select(imr_FOA,imr_URA,mat_FOA,mat_URA,tel_FOA,tel_URA) %>% as.matrix()
+  
+  rname <- tbl_Mst2_complex$gene
+  
+  rownames(mx1) <- rname
+  
+  cm <- cor(t(mx1),method = "pearson" , use="pairwise.complete.obs") # correlation matrix
+  #tmp1<-
+  
+  correlation_tbl <-
+    as_tibble( reshape2::melt(cm)) %>%
+    rename(correlation=value) %>%
+    mutate(row_idx1=as.character(Var1),row_idx2=as.character(Var2)) %>%
+    select(-Var1,-Var2)
+ 
+  
+  p_Mst2 <- correlation_tbl %>%
+    ggplot(mapping = aes(x=fct_reorder(row_idx1,correlation),
+                         y=fct_reorder(row_idx2,correlation), fill=correlation,
+                         label=sprintf("%0.2f", correlation)))+
+    geom_raster()+
+    geom_text()+
+    scale_fill_continuous(limits=c(-1, 1))+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
+    theme(axis.title.x =element_blank() , axis.title.y = element_blank(),
+          plot.margin = unit(c(0,1,0,1), "cm"))
+  
+  tbl_log2 <- tbl_stat2 %>% 
+    pivot_wider(names_from = readout, values_from = median) %>% 
+    mutate(log2_FOA=log2(FOA), log2_URA=log2(URA)) %>% 
+    mutate(URA_minus_FOA=log2_URA-log2_FOA)
+  
+  tbl_data_Mst2 <- tbl_log2 %>%
+    filter(condition %in% c("01.std")) %>% 
+    filter(secondMutation=="001.wt"|locus=="subtel") %>%
+    filter(gene %in% c("pdp3", "ptf1", "ptf2", "nto1", "eaf6", "mst2", "tfg3"))
+  
+  library(hyperSpec)
+  
+  
+  p_Mst2_growth <-tbl_data_Mst2 %>%
+    mutate(label_y=factor(gene, levels = c("tfg3", "nto1", "ptf2", "eaf6", "pdp3", "ptf1"))) %>% 
+    filter(secondMutation=="001.wt"| locus=="subtel") %>% 
+    filter(condition %in% c("01.std")) %>% 
+    ggplot(aes(x=locus, y=label_y, fill=URA_minus_FOA))+
+    geom_raster()+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "gray50", mid = "white",
+                         name = "combined \nFOA/URA score")+
+    theme(axis.title.x =element_blank() ,
+          axis.title.y = element_blank(),
+          axis.text.x = element_text(size=6, angle = 90),
+          axis.text.y= element_text(size = 6),
+          strip.text.x = element_text(size = 6),
+          legend.title = element_text(size = 5),
+          legend.text = element_text(size = 5),
+          legend.key.size = unit(0.3,"cm"),
+          title = element_text(size=6))+
+    labs(title="Relative growth", size=8)
+  #   
+  tbl_data_Mst2 %>%
+    mutate(label_y=factor(gene, levels = c("tfg3","eaf6", "ptf2", "nto1", "pdp3", "ptf1"))) %>% 
+    filter(secondMutation=="001.wt"| locus=="subtel") %>% 
+    filter(condition %in% c("01.std")) %>% 
+    ggplot(aes(x=locus, y=label_y, fill=URA_minus_FOA))+
+    geom_raster()+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "gray50", mid = "white",
+                         name = "combined \nFOA/URA score", limits=c(-0.5,1.7))+
+    scale_x_discrete(expand = c(0,0))+
+    theme(
+      #set thickness of axis ticks
+      axis.ticks=element_line(size=0.4),
+      #remove plot background
+      plot.background=element_blank(),
+      #remove plot border
+      panel.border=element_blank(),
+      axis.title.x =element_blank() ,
+      axis.title.y = element_blank(),
+      axis.text.x = element_text(vjust=0.3, size=5, angle = 90),
+      axis.text.y = element_text(size=5),
+      legend.position = "none",
+      axis.ticks.x = element_line(size = 0),
+      axis.ticks.length=unit(0,"mm"),
+      panel.background = element_blank())
+  
+  # ggsave("out_Zsuzsa/plots_figure4/Mst2_growth.pdf", height = 34, width = 20, units = "mm")
+ 
+  
+  correlation_tbl <- correlation_tbl %>%
+    mutate(label_x=factor(row_idx1, levels = c("tfg3","eaf6", "ptf2", "nto1", "pdp3", "ptf1"))) %>%
+    mutate(label_y=factor(row_idx2, levels = c("tfg3","eaf6", "ptf2", "nto1", "pdp3", "ptf1")))
+
+  
+  p_Mst2 <- correlation_tbl %>%
+    ggplot(mapping = aes(x=label_x,
+                         y=label_y, fill=correlation,
+                         label=sprintf("%0.2f", correlation)))+
+    geom_raster()+
+    geom_text(size=2)+
+    scale_fill_continuous(limits=c(-1, 1))+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
+    theme(axis.title.x =element_blank() ,
+          axis.title.y = element_blank(),
+          axis.text.y=element_text(size = 6),
+          axis.text.x = element_text(size = 6, angle = 90),
+          legend.title = element_text(size = 5),
+          legend.text = element_text(size = 5),
+          legend.key.size = unit(0.3,"cm"),
+          title = element_text(size=6),
+          legend.position = "bottom")+
+    labs(title="Mst2 complex subunits")
+ 
+  
+  correlation_tbl %>%
+    ggplot(mapping = aes(x=label_x,
+                         y=label_y, fill=correlation,
+                         #label=sprintf("%0.2f", correlation)
+                         ))+
+    geom_raster()+
+    #geom_text(size=0.5)+
+    scale_fill_continuous(limits=c(-1, 1))+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-1,1))+
+    theme(axis.title.x =element_blank() ,
+          axis.title.y = element_blank(),
+          axis.text.y=element_text(size = 5),
+          axis.text.x = element_text(size = 5, angle = 90),
+          title = element_text(size=2),
+          legend.position = "none",
+          axis.ticks.x = element_line(size = 0),
+          axis.ticks.length=unit(0,"mm"),
+          panel.background = element_blank())
+  
+  # ggsave("out_Zsuzsa/plots_figure4/Mst2_correlation.pdf", height = 34, width = 34, units = "mm")
+ 
+  
+
+  # library(hyperSpec)
+  
+
+## Set1 complex ####
+
+physical_complexes_tbl %>% 
+  filter(main_chromatin_complexes=="Set1/COMPASS") %>% 
+  pull(gene)
+
+tbl_Set1_complex <- tbl_log2_median_wide %>%
+  filter(gene %in% (physical_complexes_tbl %>% 
+           filter(main_chromatin_complexes=="Set1/COMPASS") %>% 
+           pull(gene)))
+
+
+variable_names <- colnames(tbl_Set1_complex)
+variable_names <- variable_names[2:5]
+
+mx1<-as.matrix((tbl_Set1_complex) %>% select(-gene))
+
+
+
+rname <- tbl_Set1_complex$gene
+
+rownames(mx1) <- rname
+
+cm <- cor(t(mx1),method = "pearson" , use="pairwise.complete.obs") # correlation matrix
+#tmp1<-
+
+correlation_tbl <-
+  as_tibble( reshape2::melt(cm)) %>%
+  rename(correlation=value) %>%
+  mutate(row_idx1=as.character(Var1),row_idx2=as.character(Var2)) %>%
+  select(-Var1,-Var2)
+
+
+p_Set1 <- correlation_tbl %>%
+  ggplot(mapping = aes(x=fct_reorder(row_idx1,correlation),
+                       y=fct_reorder(row_idx2,correlation), fill=correlation,
+                       label=sprintf("%0.2f", correlation)))+
+  geom_tile()+
+  geom_text(size=0.5)+
+  scale_fill_continuous(limits=c(-1, 1))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-1,1))+
+  theme(axis.title.x =element_blank() ,
+        axis.title.y = element_blank(),
+        axis.text.y=element_text(size = 2),
+        axis.text.x = element_text(size = 2, angle = 90),
+        legend.title = element_text(size = 2),
+        legend.text = element_text(size = 2),
+        legend.key.size = unit(0.15,"cm"),
+        title = element_text(size=2),
+        legend.position = "bottom",
+        axis.ticks.x = element_line(size = 0),
+        axis.ticks.length=unit(0,"mm"))
+
+
+
+leg <- get_legend(p_Set1)
+
+as_ggplot(leg)
+#ggsave("Figures/plots_figure4/legend_correlation.pdf", height = 4, width = 12, units = "mm")
+
+
+correlation_tbl %>%
+  ggplot(mapping = aes(x=fct_reorder(row_idx1,correlation),
+                       y=fct_reorder(row_idx2,correlation), fill=correlation,
+                       #label=sprintf("%0.2f", correlation)
+                       ))+
+  geom_tile()+
+  #geom_text(size=0.5)+
+  scale_fill_continuous(limits=c(-1, 1))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-1,1))+
+  theme(axis.title.x =element_blank() ,
+        axis.title.y = element_blank(),
+        axis.text.y=element_text(size = 5),
+        axis.text.x = element_text(size = 5, angle = 90),
+        title = element_text(size=2),
+        legend.position = "none",
+        axis.ticks.x = element_line(size = 0),
+        axis.ticks.length=unit(0,"mm"),
+        panel.background = element_blank())
+
+#ggsave("out_Zsuzsa/plots_figure4/Set1_correlation.pdf", height = 34, width = 34, units = "mm")
+
+
+tbl_data_Set1 <- tbl_log2 %>%
+  filter(condition %in% c("01.std")) %>% 
+  filter(secondMutation=="001.wt"|locus=="subtel") %>%
+  filter(gene %in% rname)
+
+library(hyperSpec)
+
+
+p_Set1_growth <-tbl_data_Set1 %>%
+  mutate(label_y=factor(gene, levels = c("shg1", "set1", "ash2", "swd3", "spf1", "swd1"))) %>% 
+  filter(secondMutation=="001.wt"| locus=="subtel") %>% 
+  filter(condition %in% c("01.std")) %>% 
+  ggplot(aes(x=locus, y=label_y, fill=URA_minus_FOA))+
+  geom_raster()+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "gray50", mid = "white",
+                       name = "combined \nFOA/URA score")+
+  theme(axis.title.x =element_blank() ,
+        axis.title.y = element_blank(),
+        axis.text.x = element_text(size=6, angle = 90),
+        axis.text.y= element_text(size = 6),
+        strip.text.x = element_text(size = 6),
+        legend.title = element_text(size = 5),
+        legend.text = element_text(size = 5),
+        legend.key.size = unit(0.3,"cm"),
+        title = element_text(size=6))+
+  labs(title="Relative growth", size=8)
+
+p_Set1_growth_for_legend <- 
+  tbl_data_Set1 %>%
+  mutate(label_y=factor(gene, levels = c("shg1", "set1", "ash2", "swd3", "spf1", "swd1"))) %>% 
+  filter(secondMutation=="001.wt"| locus=="subtel") %>% 
+  filter(condition %in% c("01.std")) %>% 
+  ggplot(aes(x=locus, y=label_y, fill=URA_minus_FOA))+
+  geom_tile()+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "gray50", mid = "white",
+                       name = "combined \nFOA/URA score", limits=c(-0.5,1.7))+
+  scale_x_discrete(expand = c(0,0))+
+  theme(axis.title.x =element_blank() ,
+        axis.title.y = element_blank(),
+        axis.text.y=element_text(size = 2),
+        axis.text.x = element_text(size = 2, angle = 90),
+        legend.title = element_text(size = 2),
+        legend.text = element_text(size = 2),
+        legend.key.size = unit(0.15,"cm"),
+        title = element_text(size=2),
+        legend.position = "bottom",
+        axis.ticks.x = element_line(size = 0),
+        axis.ticks.length=unit(0,"mm"))
+
+
+
+leg <- get_legend(p_Set1_growth_for_legend)
+
+as_ggplot(leg)
+#ggsave("Figures/plots_figure4/legend_growth.pdf", height = 4, width = 13.5, units = "mm")
+
+
+#   
+tbl_data_Set1 %>%
+  mutate(label_y=factor(gene, levels = c("shg1", "set1", "swd3", "ash2", "spf1", "swd1"))) %>% 
+  filter(secondMutation=="001.wt"| locus=="subtel") %>% 
+  filter(condition %in% c("01.std")) %>% 
+  ggplot(aes(x=locus, y=label_y, fill=URA_minus_FOA))+
+  geom_tile()+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "gray50", mid = "white",
+                       name = "combined \nFOA/URA score", limits=c(-0.5,1.7))+
+  scale_x_discrete(expand = c(0,0))+
+  theme(
+    #set thickness of axis ticks
+    axis.ticks=element_line(size=0.4),
+    #remove plot background
+    plot.background=element_blank(),
+    #remove plot border
+    panel.border=element_blank(),
+    axis.title.x =element_blank() ,
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(vjust=0.3,size=5, angle = 90),
+    axis.text.y = element_text(size=5),
+    legend.position = "none",
+    axis.ticks.x = element_line(size = 0),
+    axis.ticks.length=unit(0,"mm"),
+    panel.background = element_blank())
+
+#ggsave("out_Zsuzsa/plots_figure4/Set1_growth.pdf", height = 34, width = 20, units = "mm")
+
+# DASH complex ####
+
+tbl_log2 <- tbl_log2 %>% 
+  mutate(locus=case_when(locus=="imr"~"CEN",
+                         locus=="mat"~"MAT",
+                         locus=="subtel"~"SUBTEL",
+                         locus=="tel"~"TEL"))
+
+tbl_DASH_complex <- tbl_log2_median_wide %>%
+  filter(gene %in% c("ask1", "dad1", "dad2", "dad3", "dad4", "dad5", "dam1", "duo1", "spc19"))
+# spc34 was excluded due to many missing values
+
+
+variable_names <- colnames(tbl_DASH_complex)
+variable_names <- variable_names[2:5]
+
+mx1<-as.matrix((tbl_DASH_complex) %>% select(-gene))
+
+
+
+rname <- tbl_DASH_complex$gene
+
+rownames(mx1) <- rname
+
+cm <- cor(t(mx1),method = "pearson" , use="pairwise.complete.obs") # correlation matrix
+#tmp1<-
+
+correlation_tbl <-
+  as_tibble( reshape2::melt(cm)) %>%
+  rename(correlation=value) %>%
+  mutate(row_idx1=as.character(Var1),row_idx2=as.character(Var2)) %>%
+  select(-Var1,-Var2)
+
+
+p_DASH <- correlation_tbl %>%
+  ggplot(mapping = aes(x=fct_reorder(row_idx1,correlation),
+                       y=fct_reorder(row_idx2,correlation), fill=correlation,
+                       label=sprintf("%0.2f", correlation)))+
+  geom_raster()+
+  geom_text(size=0.5)+
+  scale_fill_continuous(limits=c(-1, 1))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-1,1))+
+  theme(axis.title.x =element_blank() ,
+        axis.title.y = element_blank(),
+        axis.text.y=element_text(size = 2),
+        axis.text.x = element_text(size = 2, angle = 90),
+        legend.title = element_text(size = 2),
+        legend.text = element_text(size = 2),
+        legend.key.size = unit(0.15,"cm"),
+        title = element_text(size=2),
+        legend.position = "bottom",
+        axis.ticks.x = element_line(size = 0),
+        axis.ticks.length=unit(0,"mm"))
+
+leg <- get_legend(p_DASH)
+
+as_ggplot(leg)
+#ggsave("out_Zsuzsa/plots_figure4/legend_correlation.pdf", height = 4, width = 12, units = "mm")
+
+
+correlation_tbl %>%
+  ggplot(mapping = aes(x=factor(row_idx1, levels = c( "dad1","ask1", "dad3","duo1","dad2", "dad4", "dad5", "dam1",  "spc19")),
+                       y=factor(row_idx2, levels = c( "dad1","ask1", "dad3","duo1","dad2", "dad4", "dad5", "dam1",  "spc19")), fill=correlation,
+                       #label=sprintf("%0.2f", correlation)
+  ))+
+  geom_raster()+
+  #geom_text(size=0.5)+
+  scale_fill_continuous(limits=c(-1, 1))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-1,1))+
+  theme(axis.title.x =element_blank() ,
+        axis.title.y = element_blank(),
+        axis.text.y=element_text(size = 5),
+        axis.text.x = element_text(size = 5, angle = 90),
+        title = element_text(size=2),
+        legend.position = "none",
+        axis.ticks.x = element_line(size = 0),
+        axis.ticks.length=unit(0,"mm"),
+        panel.background = element_blank())
+
+# ggsave("out_Zsuzsa/plots_figure4/DASH_correlation.pdf", height = 34, width = 34, units = "mm")
+
+
+
+# supplementary figure 4. 
+# dam1 and duo1 are renoved , because was wrong by PCR, ORF is still there
+  tbl_data_DASH %>%
+    filter(!gene %in% c("dam1", "duo1")) %>% 
+    mutate(label_y=factor(gene, levels = c("dad1","ask1", "dad3","dad2", "dad4", "dad5", "spc19"))) %>% 
+    # filter(secondMutation=="001.wt"| locus=="subtel") %>% 
+    # filter(condition %in% c("01.std")) %>% 
+    ggplot(aes(x=locus, y=label_y, fill=URA_minus_FOA))+
+    geom_tile()+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "gray50", mid = "white",
+                         name = "combined \nFOA/URA score", limits=c(-1.2,3.1))+  # limit values were changed --> negative values are too faint, other legend needed
+    scale_x_discrete(expand = c(0,0))+
+    theme(
+      #set thickness of axis ticks
+      axis.ticks=element_line(size=0.4),
+      #remove plot background
+      plot.background=element_blank(),
+      #remove plot border
+      panel.border=element_blank(),
+      axis.title.x =element_blank() ,
+      axis.title.y = element_blank(),
+      axis.text.x = element_text(vjust=0.3,size=6, angle = 90),
+      axis.text.y = element_text(size=5),
+      legend.position = "none",
+      legend.key.size = unit(0.2, 'cm'),
+      legend.text = element_text(size=4),
+      legend.title = element_text(size=5),
+      axis.ticks.x = element_line(size = 0),
+      axis.ticks.length=unit(0,"mm"),
+      panel.background = element_blank())
+  
+  #ggsave("Figures/Plots_figureS5/DASH_growth.pdf", height = 40, width = 30, units = "mm")
+  
+  # RITS complex ####
+  
+  
+  tbl_data_RITS <- tbl_log2 %>%
+    filter(condition %in% c("01.std")) %>% 
+    filter(secondMutation=="001.wt"|locus=="SUBTEL") %>%
+    filter(gene %in% c("arb2", "ers1", "dsh1", "chp1"))
+  
+
+  
+  #   
+  tbl_data_RITS %>%
+    mutate(label_y=factor(gene, levels = c("chp1","dsh1","ers1", "arb2"))) %>% 
+    filter(secondMutation=="001.wt"| locus=="SUBTEL") %>% 
+    filter(condition %in% c("01.std")) %>% 
+    ggplot(aes(x=locus, y=label_y, fill=URA_minus_FOA))+
+    geom_tile()+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "gray50", mid = "white",
+                         name = "combined \nFOA/URA score",  limits=c(-1.2,3.1))+  # limit values were changed --> negative values are too faint, other legend needed
+    scale_x_discrete(expand = c(0,0))+
+    theme(
+      #set thickness of axis ticks
+      axis.ticks=element_line(size=0.4),
+      #remove plot background
+      plot.background=element_blank(),
+      #remove plot border
+      panel.border=element_blank(),
+      axis.title.x =element_blank() ,
+      axis.title.y = element_blank(),
+      axis.text.x = element_text(vjust=0.3,size=6, angle = 90),
+      axis.text.y = element_text(size=5),
+      legend.position = "none",
+      legend.key.size = unit(0.2, 'cm'),
+      legend.text = element_text(size=4),
+      legend.title = element_text(size=5),
+      axis.ticks.x = element_line(size = 0),
+      axis.ticks.length=unit(0,"mm"),
+      panel.background = element_blank())
+  
+  #ggsave("Figures/Plots_figureS5/RITS_growth.pdf", height = 35, width = 30, units = "mm")
+  
+  
+  # SPLICING factors ####
+  
+  
+  tbl_data_splicing <- tbl_log2 %>%
+    filter(condition %in% c("01.std")) %>% 
+    filter(secondMutation=="001.wt"|locus=="SUBTEL") %>%
+    filter(gene %in% c("sde2", "cay1", "sap14*", "cwf14"))
+
+  
+  
+  #   
+  tbl_data_splicing %>%
+    mutate(label_y=factor(gene, levels = c("sde2", "cay1", "sap14*", "cwf14"))) %>% 
+    filter(secondMutation=="001.wt"| locus=="SUBTEL") %>% 
+    filter(condition %in% c("01.std")) %>% 
+    ggplot(aes(x=locus, y=label_y, fill=URA_minus_FOA))+
+    geom_tile()+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "gray50", mid = "white",
+                         name = "combined \nFOA/URA score",  limits=c(-1.2,3.1))+  # limit values were changed --> negative values are too faint, other legend needed
+    scale_x_discrete(expand = c(0,0))+
+    theme(
+      #set thickness of axis ticks
+      axis.ticks=element_line(size=0.4),
+      #remove plot background
+      plot.background=element_blank(),
+      #remove plot border
+      panel.border=element_blank(),
+      axis.title.x =element_blank() ,
+      axis.title.y = element_blank(),
+      axis.text.x = element_text(vjust=0.3,size=6, angle = 90),
+      axis.text.y = element_text(size=5),
+      legend.position = "none",
+      legend.key.size = unit(0.2, 'cm'),
+      legend.text = element_text(size=4),
+      legend.title = element_text(size=5),
+      axis.ticks.x = element_line(size = 0),
+      axis.ticks.length=unit(0,"mm"),
+      panel.background = element_blank())
+  
+  ggsave("Figures/Plots_figureS5/splicing_growth.pdf", height = 35, width = 30, units = "mm")
+  
+  
+  
+  # Prefoldin complex ####
+  
+  
+  tbl_data_prefoldin <- tbl_log2 %>%
+    filter(condition %in% c("01.std")) %>% 
+    filter(secondMutation=="001.wt"|locus=="SUBTEL") %>%
+    filter(gene %in% c("pfd3", "pfd4", "pfd5", "pfd6"))
+
+
+#   
+  tbl_data_prefoldin %>%
+  mutate(label_y=factor(gene, levels = c("pfd3", "pfd4", "pfd5", "pfd6"))) %>% 
+  filter(secondMutation=="001.wt"| locus=="SUBTEL") %>% 
+  filter(condition %in% c("01.std")) %>% 
+  ggplot(aes(x=locus, y=label_y, fill=URA_minus_FOA))+
+  geom_tile()+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "gray50", mid = "white",
+                       name = "combined \nFOA/URA score",  limits=c(-1.2,3.1))+  # limit values were changed --> negative values are too faint, other legend needed
+  scale_x_discrete(expand = c(0,0))+
+  theme(
+    #set thickness of axis ticks
+    axis.ticks=element_line(size=0.4),
+    #remove plot background
+    plot.background=element_blank(),
+    #remove plot border
+    panel.border=element_blank(),
+    axis.title.x =element_blank() ,
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(vjust=0.3,size=6, angle = 90),
+    axis.text.y = element_text(size=5),
+    legend.position = "none",
+    legend.key.size = unit(0.2, 'cm'),
+    legend.text = element_text(size=4),
+    legend.title = element_text(size=5),
+    axis.ticks.x = element_line(size = 0),
+    axis.ticks.length=unit(0,"mm"),
+    panel.background = element_blank())
+
+#ggsave("Figures/Plots_figureS5/prefoldin_growth.pdf", height = 35, width = 30, units = "mm")
+  
+  # Nucleoporins ####
+  
+  
+  tbl_data_nucleoporins <- tbl_log2 %>%
+    filter(condition %in% c("01.std")) %>% 
+    filter(secondMutation=="001.wt"|locus=="SUBTEL") %>%
+    filter(gene %in% c("alm1", "nup40", "nup61", "nup37","nup184", "nup132", "npp106"))
+  
+  
+  #   
+  tbl_data_nucleoporins %>%
+    mutate(label_y=factor(gene, levels = c("alm1", "nup40", "nup61", "nup37","nup184", "nup132", "npp106"))) %>% 
+    filter(secondMutation=="001.wt"| locus=="SUBTEL") %>% 
+    filter(condition %in% c("01.std")) %>% 
+    ggplot(aes(x=locus, y=label_y, fill=URA_minus_FOA))+
+    geom_tile()+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "gray50", mid = "white",
+                         name = "combined \nFOA/URA score",  limits=c(-1.2,3.1))+  # limit values were changed --> negative values are too faint, other legend needed
+    scale_x_discrete(expand = c(0,0))+
+    theme(
+      #set thickness of axis ticks
+      axis.ticks=element_line(size=0.4),
+      #remove plot background
+      plot.background=element_blank(),
+      #remove plot border
+      panel.border=element_blank(),
+      axis.title.x =element_blank() ,
+      axis.title.y = element_blank(),
+      axis.text.x = element_text(vjust=0.3,size=6, angle = 90),
+      axis.text.y = element_text(size=5),
+      legend.position = "none",
+      legend.key.size = unit(0.2, 'cm'),
+      legend.text = element_text(size=4),
+      legend.title = element_text(size=5),
+      axis.ticks.x = element_line(size = 0),
+      axis.ticks.length=unit(0,"mm"),
+      panel.background = element_blank())
+  
+  #ggsave("Figures/Plots_figureS5/nucleoporins_growth.pdf", height = 45, width = 30, units = "mm")
+  
+  
+  # supplementary figure 4. 
+  # dam1 and duo1 are renoved , because was wrong by PCR, ORF is still there
+  tbl_data_DASH %>%
+    filter(!gene %in% c("dam1", "duo1")) %>% 
+    mutate(label_y=factor(gene, levels = c("dad1","ask1", "dad3","dad2", "dad4", "dad5", "spc19"))) %>% 
+    filter(secondMutation=="001.wt"| locus=="subtel") %>% 
+    filter(condition %in% c("01.std")) %>% 
+    ggplot(aes(x=locus, y=label_y, fill=URA_minus_FOA))+
+    geom_raster()+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "gray50", mid = "white",
+                         name = "combined \nFOA/URA score", limits=c(-0.6,2.8))+  # limit values were changed --> negative values are too faint, other legend needed
+    scale_x_discrete(expand = c(0,0))+
+    theme(
+      #set thickness of axis ticks
+      axis.ticks=element_line(size=0.4),
+      #remove plot background
+      plot.background=element_blank(),
+      #remove plot border
+      panel.border=element_blank(),
+      axis.title.x =element_blank() ,
+      axis.title.y = element_blank(),
+      axis.text.x = element_text(vjust=0.3,size=6, angle = 90),
+      axis.text.y = element_text(size=5),
+      #legend.position = "none",
+      legend.key.size = unit(0.2, 'cm'),
+      legend.text = element_text(size=4),
+      legend.title = element_text(size=5),
+      axis.ticks.x = element_line(size = 0),
+      axis.ticks.length=unit(0,"mm"),
+      panel.background = element_blank())
+  
+  #ggsave("Figures/plots_figure4/DASH_growth.pdf", height = 40, width = 50, units = "mm")
+  
+  
+  
+  ############################### suppl Figure -growth ##################################################################################
+  
+  # growth plot: individual screens: Set1, SAGA, Mst2
+  
+  tbl1_long <- tbl1 %>% 
+    select(-URA_minus_FOA) %>% 
+    pivot_longer(cols = c(FOA, URA) , names_to = "readout", values_to = "relative growth")
+  
+  library(ggh4x)  
+  
+  cowplot::plot_grid(
+  
+  tbl1_long %>%
+    filter(!grepl("S019", rest_of_key)) %>% 
+    filter(!grepl("S030", rest_of_key)) %>% 
+    filter(gene %in% c("shg1", "set1", "swd3", "ash2", "spf1", "swd1")) %>%
+    mutate(gene_f=factor(gene, levels=c("shg1", "set1", "swd3", "ash2", "spf1", "swd1"))) %>% 
+    ggplot(aes(x=rest_of_key, y=gene_f))+
+    geom_tile(aes(fill=`relative growth`))+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
+    facet_nested(.~heterochromatic_region+readout,scales = "free", space = "free")+
+    theme_bw()+
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 8),
+          axis.title.y = element_blank(),
+          axis.title.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          # margin: top, right, bottom, and left
+          plot.margin = unit(c(0.2, 1.5, 1, 0), "cm"),
+          strip.background=element_rect(color="gray50", fill = "gray90"),
+          strip.text.x = element_text(size = 8),
+          panel.spacing=unit(0, "mm"),
+          panel.border=element_rect(color="gray70"),
+          panel.grid = element_blank(),
+          legend.key.size = unit(0.5, "cm"))+
+    labs(fill="relative growth"),
+  
+  
+  tbl1_long %>%
+    filter(!grepl("S019", rest_of_key)) %>% 
+    filter(!grepl("S030", rest_of_key)) %>% 
+    filter(gene %in% c("ubp8",  "sgf11","sgf29", "sgf73", "ada2", "ngg1", "gcn5" , "spt20",   "tra1")) %>% 
+    mutate(gene_f=factor(gene, levels=c("ubp8",  "sgf11","sgf29", "sgf73", "ada2", "ngg1", "gcn5" , "spt20",   "tra1"))) %>% 
+    ggplot(aes(x=rest_of_key, y=gene_f))+
+    geom_tile(aes(fill=`relative growth`))+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
+    facet_nested(.~heterochromatic_region+readout,scales = "free", space = "free")+
+    theme_bw()+
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 8),
+          axis.title.y = element_blank(),
+          axis.title.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          # margin: top, right, bottom, and left
+          plot.margin = unit(c(0.2, 1.5, 1, 0), "cm"),
+          strip.background=element_rect(color="gray50", fill = "gray90"),
+          strip.text.x = element_text(size = 8),
+          panel.spacing=unit(0, "mm"),
+          panel.border=element_rect(color="gray70"),
+          panel.grid = element_blank(),
+          legend.key.size = unit(0.5, "cm"))+
+    labs(fill="relative growth"),
+  
+  tbl1_long %>%
+    filter(!grepl("S019", rest_of_key)) %>% 
+    filter(!grepl("S030", rest_of_key)) %>% 
+    filter(gene %in% c("tfg3","eaf6", "ptf2", "nto1", "pdp3", "ptf1")) %>% 
+    mutate(gene_f=factor(gene, levels=c("tfg3","eaf6", "ptf2", "nto1", "pdp3", "ptf1"))) %>% 
+    ggplot(aes(x=rest_of_key, y=gene))+
+    geom_tile(aes(fill=`relative growth`))+
+    scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white")+
+    facet_nested(.~heterochromatic_region+readout,scales = "free", space = "free")+
+    theme_bw()+
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 8),
+          axis.title.y = element_blank(),
+          axis.title.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          # margin: top, right, bottom, and left
+          plot.margin = unit(c(0.2, 1.5, 1, 0), "cm"),
+          strip.background=element_rect(color="gray50", fill = "gray90"),
+          strip.text.x = element_text(size = 8),
+          panel.spacing=unit(0, "mm"),
+          panel.border=element_rect(color="gray70"),
+          panel.grid = element_blank(),
+          legend.key.size = unit(0.5, "cm"))+
+    labs(fill="relative growth"),
+  
+  ncol = 1, align = "v")
+  
+  
+  
+  
+  #ggsave("Figures/plots_figure4/suppl_fig_growth.pdf", width = 170, height = 180, units = "mm")
+  
+  
+
+  
