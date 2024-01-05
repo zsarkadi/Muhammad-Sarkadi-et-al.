@@ -1,0 +1,1030 @@
+library(tidyverse)
+
+setwd("D:/documents/Heterochromatin_screen/analysis/Heterochromatin_screen_R/PUBLICATION")
+
+tbl_strain_wrong <- read_csv("gene_red_list_v3.csv")
+#tbl_big <- read_csv("screendata_CENS36S37_replacedby_S34S35.csv")
+tbl_big <- read_csv("DataDerived/screens_100screens_S19_S30_removed.csv")
+
+tbl_hits <- read_csv("DataDerived/hits_updated_names_final.csv")
+
+tbl_clusters_together <- read_csv("DataDerived/tbl_clusters_several_runs_together.csv") #collected together by Sigurd
+
+tbl_hits <- tbl_hits %>% 
+  mutate(heterochromatic_region=case_when(heterochromatic_region=="imr"~"CEN",
+                                          heterochromatic_region=="mat"~"MAT",
+                                          heterochromatic_region=="subtel"~"SUBTEL",
+                                          heterochromatic_region=="tel"~"TEL"))
+
+tbl_hits %>% 
+  filter(hit_silencing==1) %>% 
+  pull(gene) %>% 
+  unique()
+#180
+
+tbl_big %>%  #2985
+  filter(grepl("\\*", gene)) %>% 
+  pull(gene)
+#"ccr1*"   "gst3*"   "lcf1*"   "met10*"  "myo1*"   "nup132*" "poz1*"   "sap14*"  "srb10*"  "swi6*"   "trx2*"  
+
+# remove genes (non-star) that have a star-labelled pair 
+
+list_gene_to_remove <- tbl_big %>% 
+  filter(gene %in% c("ccr1", "gst3", "lcf1", "met10", "myo1", "nup132", "poz1", "sap14", "srb10", "swi6", "trx2")) %>% 
+  pull(gene)
+
+tbl_big <- tbl_big %>%
+  filter(!gene %in% list_gene_to_remove)
+                                 
+
+
+library(dplyr)
+tbl_big_renamed <- tbl_big %>%
+  rename_at(vars(starts_with('imr')),
+            ~sub("imr", "CEN", ., perl = TRUE)) %>%
+  rename_at(vars(starts_with('mat')),
+            ~sub("mat", "MAT", ., perl = TRUE)) %>%
+  rename_at(vars(starts_with('subtel')),
+            ~sub("subtel", "SUBTEL", ., perl = TRUE)) %>% 
+  rename_at(vars(starts_with('tel')),
+            ~sub("tel", "TEL", ., perl = TRUE))
+
+colnames(tbl_big_renamed)
+
+#write.csv(tbl_big_renamed, "DataDerived/screen_data_tableS1_20230815_updated_names_screenIDrenamed.csv")
+
+heterochromatin_screens_log2_tbl<-
+  tbl_big_renamed %>%
+  mutate_at(.vars = setdiff(names(tbl_big_renamed), c("gene"  , "systematic_ID" )),
+            .funs = function(x)
+            {
+              y <- log2(x)
+              ifelse(is.finite(y), y, NA)
+            }
+  )
+colnames(heterochromatin_screens_log2_tbl)
+
+
+
+#heterochromatin_screens_log2_tbl %>%filter(gene=="amo1") %>% t()
+#names(heterochromatin_screens_tbl)
+
+# long format table
+regexp1<-"^([^_]+)_([^_]+)_([^_]+)_([^_]+)_([^_]+)$"
+regexp2<-"^(.+)\\.([1234])$"
+heterochromatin_screen_lft<-heterochromatin_screens_log2_tbl %>% 
+  #select(-systematic_ID) %>% 
+  gather(key="key", value="relative_fitness",  -gene, -systematic_ID) %>% 
+  mutate(
+    heterochromatic_region=gsub(regexp1,"\\1", key),
+    medium=gsub(regexp1,"\\2", key),
+    rest_of_key=gsub(regexp1,"\\3_\\4_\\5", key)
+  ) %>% 
+  mutate(
+    technical_replicate_id=gsub(regexp2,"\\2", rest_of_key),
+    rest_of_key=gsub(regexp2,"\\1", rest_of_key)
+  ) %>% 
+  select(-key)
+
+
+stopifnot(all(grepl("^[1234]$",heterochromatin_screen_lft$technical_replicate_id)))  # each key ends with a dot and a number e.g.  ".1"
+
+
+##I take the mean of 2 technical replicates  of the same day
+heterochromatin_screen_lft<-
+  heterochromatin_screen_lft %>%
+  group_by( gene, systematic_ID, heterochromatic_region, medium, rest_of_key   ) %>% 
+  summarise(aggregated_rel_fitness=mean(relative_fitness, na.rm=TRUE), .groups="drop" ) 
+  
+
+
+# silencing factors ####
+
+
+tbl_hits_2 <- tbl_hits %>% 
+  filter(hit_silencing==TRUE) %>% 
+  group_by(gene) %>% 
+  mutate(domain_hits_silencing=n()) %>% 
+  ungroup()
+
+# all hits
+tbl_hits %>% 
+  filter(hit_silencing==TRUE) %>% 
+  pull(gene) %>% 
+  unique()
+# 180
+
+
+tbl_hits_wide <- tbl_hits_2 %>% 
+  select(gene, heterochromatic_region,URA_minus_FOA_score, domain_hits_silencing) %>% 
+  pivot_wider(names_from = heterochromatic_region, values_from = URA_minus_FOA_score)
+
+#library('UpSetR')
+
+#require(ggplot2); require(plyr); 
+require(gridExtra); require(grid);
+
+
+tbl_hits_wide
+
+tbl_hits_wide_2 <- tbl_hits_wide %>% mutate_if(is.numeric, ~1 * (. != 0))
+
+tbl_hits_wide_2[is.na(tbl_hits_wide_2)] <- 0
+
+# combine subtel and tel 
+
+tbl_hits_wide_3 <- tbl_hits_wide_2 %>% 
+  mutate("SUBTEL/TEL"=case_when(TEL==1|SUBTEL==1~1,
+                                TRUE~0)) %>%
+  select(-TEL, -SUBTEL)
+
+
+
+tbl_hits_wide_3 <- as.data.frame(tbl_hits_wide_3)
+
+str(tbl_hits_wide_3)
+
+tbl_hits_wide_3 %>% 
+  #filter(CEN==1) %>%
+  pull(gene) %>% 
+  unique()
+
+
+
+tbl_hits_wide_3$domain_hits_silencing<- rowSums(tbl_hits_wide_3[, 3:5])
+
+
+
+# supplementary table
+
+tbl_clusters <- tbl_clusters_together %>% 
+  select(gene, `Freq + Biol+Silh`) %>% 
+  rename(cluster=`Freq + Biol+Silh`)
+
+tbl_hits_wide_3 <- left_join(tbl_hits_wide_3, tbl_clusters)
+
+tbl_hits_wide_silencing <- tbl_hits_wide_3 %>% 
+  select(-domain_hits_silencing) %>% 
+  mutate(cluster=case_when(cluster==1 ~ "Cluster I",
+                         cluster==2 ~"Cluster II",
+                         cluster==3 ~ "Cluster III",
+                         cluster==4 ~ "Cluster IV",
+                         cluster==5 ~ "Cluster V",
+                         cluster==6 ~ "Cluster VI",
+                         cluster==7 ~ "Cluster VII")) %>% 
+  mutate(silencing_or_antisilencing_hit="silencing") %>% 
+  mutate(cluster=factor(cluster, levels=c("Cluster I", "Cluster II", "Cluster III", "Cluster IV", "Cluster V", "Cluster VI", "Cluster VII"))) %>% 
+  arrange(cluster) %>% 
+  select(gene, silencing_or_antisilencing_hit, CEN, MAT,  `SUBTEL/TEL`, cluster)
+
+
+
+tbl_URA_minus_FOA_score <- tbl_hits %>% 
+  select(gene, systematic_ID, heterochromatic_region, URA_minus_FOA_score) %>% 
+  pivot_wider(names_from = heterochromatic_region, values_from = URA_minus_FOA_score)
+
+tbl_silencing <- left_join(tbl_hits_wide_silencing, tbl_URA_minus_FOA_score %>% 
+                             rename("URA_minus_FOA_score(CEN)"=CEN,
+                                    "URA_minus_FOA_score(MAT)"=MAT,
+                                    "URA_minus_FOA_score(SUBTEL)"=SUBTEL,
+                                    "URA_minus_FOA_score(TEL)"=TEL))
+
+colnames(tbl_silencing)
+
+tbl_silencing <- tbl_silencing[,c(1, 7, 2:6, 8:11) ]
+
+tbl_silencing$systematic_ID <- gsub("\\*", "", tbl_silencing$systematic_ID)
+
+#write_csv(tbl_silencing, "DataDerived/tbl_silencing_suppl_100screens_threshold_imr3_others_2point5_clusters.csv")
+
+
+
+
+
+#######################################################################################################################xx
+
+
+
+silencing_factors <- tbl_silencing %>% 
+  pull(gene)
+
+
+heterochromatin_screen_lft_median <- heterochromatin_screen_lft %>% 
+  group_by(gene, systematic_ID, heterochromatic_region, medium) %>% 
+  summarise(median_rel_growth=median(aggregated_rel_fitness, na.rm=TRUE)) %>% 
+  ungroup()
+
+
+heterochromatin_screen_wide <- heterochromatin_screen_lft_median %>% 
+  mutate(screen=paste(heterochromatic_region, medium, sep = "_")) %>% 
+  select(-heterochromatic_region, -medium) %>%
+  pivot_wider(names_from = screen, values_from = median_rel_growth)
+  
+
+tbl_log2 <- heterochromatin_screen_wide
+
+
+# filter for the hits ####
+
+tbl1 <- tbl_log2 %>% 
+  filter(gene %in% silencing_factors)
+
+# put less weight on subtel (50%) and tel (50%) ####
+
+tbl1_weihghts <- tbl1 %>% 
+  mutate(SUBTEL_FOA=SUBTEL_FOA/2,
+       SUBTEL_URA=SUBTEL_URA/2,
+       TEL_FOA=TEL_FOA/2,
+       TEL_URA=TEL_URA/2)
+
+
+# remove rows with too many NAs
+sum(is.na(tbl1_weihghts))
+#8
+
+tbl2 <- tbl1_weihghts[rowSums(is.na(tbl1_weihghts[ , 3:10])) <2 , ]
+
+sum(is.na(tbl2))
+
+mx1<-as.matrix(tbl2 %>%
+                 select(-(1), -(2)))
+
+rname <- tbl2$gene
+
+rownames(mx1) <- rname
+
+#mx2 <- scale(mx1)
+
+sum(is.na(mx1))
+
+
+
+as.matrix(mx1) %>% View()
+#176
+
+#install.packages("stats")
+
+library(stats)
+
+
+# k=7 ####
+#set.seed(42) # to have always the same random set
+#clustering_object1<-kmeans(na.omit(mx1), centers = 7, iter.max = 1000, nstart = 1000)
+
+require(graphics)
+
+tbl_clusters_together <- read_csv("DataDerived/tbl_clusters_several_runs_together.csv") #collected together by Sigurd
+
+tbl_clusters <- tbl_clusters_together %>% 
+  select(gene, `Freq + Biol+Silh`)
+
+
+
+#tbl_clusters <- tibble(gene=rname, cluster=factor(clustering_object1$cluster))
+
+
+heterochromatin_screen_lft_clusters <- left_join(heterochromatin_screen_lft, tbl_clusters %>% rename(cluster=`Freq + Biol+Silh`))
+
+require(cluster)
+
+# D <- daisy(mx1)
+# #plot(silhouette(clustering_object1$cluster, D), col=1:6 , border=NA)
+# shilhouette_tbl<-silhouette(clustering_object1$cluster, D)
+# shilhouette_tbl<-as_tibble(shilhouette_tbl)
+# shilhouette_tbl<-shilhouette_tbl %>% mutate(gene=rownames(mx1)) %>% 
+#   arrange(cluster,desc(sil_width))
+# shilhouette_tbl %>%  ggplot(mapping = aes(x=gene,y=sil_width, fill=sprintf("cl_%i",cluster)))+
+#   geom_bar(stat="identity")+
+#   scale_fill_discrete()+
+#   scale_x_discrete(limits=shilhouette_tbl$gene)+
+#   theme(axis.text.x = element_text(size=2, angle=90))
+# 
+# mean(shilhouette_tbl$sil_width)
+# #0.247914 
+
+#ggsave("Figures/shilhouette_plot_7_clusters_20231206_1000nstart_final.pdf", height = 50, width = 200, units = "mm")
+
+library(ggh4x)
+
+plot1 <- heterochromatin_screen_lft_clusters %>% 
+  filter(cluster==1) %>% 
+  ggplot(aes(x=rest_of_key, y=gene))+
+  geom_tile(aes(fill=aggregated_rel_fitness))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4.87, 4.69))+
+  scale_y_discrete(position="right")+
+  facet_nested(.~heterochromatic_region+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(0, 1, 0, 0), "cm"),
+        strip.background=element_rect(color="gray50", fill = "gray90"),
+        strip.text.x = element_text(size = 5),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"),
+        legend.position = "none")+
+  labs(fill="relative growth")
+
+
+plot2 <- heterochromatin_screen_lft_clusters %>% 
+  filter(cluster==2) %>% 
+  ggplot(aes(x=rest_of_key, y=gene))+
+  geom_tile(aes(fill=aggregated_rel_fitness))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4.87, 4.69))+
+  scale_y_discrete(position="right")+
+  facet_nested(.~heterochromatic_region+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(0.05, 1, 0.05, 0), "cm"),
+        #strip.background=element_rect(color="gray50", fill = "gray90"),
+        strip.text.x = element_blank(),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"),
+        legend.position = "none")
+
+
+plot3 <- heterochromatin_screen_lft_clusters %>% 
+  filter(cluster==3) %>% 
+  ggplot(aes(x=rest_of_key, y=gene))+
+  geom_tile(aes(fill=aggregated_rel_fitness))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4.87, 4.69))+
+  scale_y_discrete(position="right")+
+  facet_nested(.~heterochromatic_region+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(0.05, 1, 0.05, 0), "cm"),
+        #strip.background=element_rect(color="gray50", fill = "gray90"),
+        strip.text.x = element_blank(),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"),
+        legend.position = "none")
+
+
+plot4 <- heterochromatin_screen_lft_clusters %>% 
+  filter(cluster==4) %>% 
+  ggplot(aes(x=rest_of_key, y=gene))+
+  geom_tile(aes(fill=aggregated_rel_fitness))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4.87, 4.69))+
+  scale_y_discrete(position="right")+
+  facet_nested(.~heterochromatic_region+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(0, 1, -1, 0), "cm"),
+        strip.background=element_blank(),
+        strip.text.x = element_blank(),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"),
+        legend.position = "none")+
+  labs(fill="relative growth")
+
+
+
+plot5 <- heterochromatin_screen_lft_clusters %>% 
+  filter(cluster==5) %>% 
+  ggplot(aes(x=rest_of_key, y=gene))+
+  geom_tile(aes(fill=aggregated_rel_fitness))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4.87, 4.69))+
+  scale_y_discrete(position="right")+
+  facet_nested(.~heterochromatic_region+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(-2, 1, 0, 0), "cm"),
+        #strip.background=element_blank(),
+        strip.text.x = element_blank(),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"),
+        legend.position = "none")+
+  labs(fill="relative growth")
+
+plot6 <- heterochromatin_screen_lft_clusters %>% 
+  filter(cluster==6) %>% 
+  ggplot(aes(x=rest_of_key, y=gene))+
+  geom_tile(aes(fill=aggregated_rel_fitness))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4.87, 4.69))+
+  scale_y_discrete(position="right")+
+  facet_nested(.~heterochromatic_region+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(-2, 1, 0, 0), "cm"),
+        #strip.background=element_blank(),
+        strip.text.x = element_blank(),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"),
+        legend.position = "none")+
+  labs(fill="relative growth")
+
+plot7 <- heterochromatin_screen_lft_clusters %>% 
+  filter(cluster==7) %>% 
+  ggplot(aes(x=rest_of_key, y=gene))+
+  geom_tile(aes(fill=aggregated_rel_fitness))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4.87, 4.69))+
+  scale_y_discrete(position="right")+
+  facet_nested(.~heterochromatic_region+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(-2, 1, 0, 0), "cm"),
+        #strip.background=element_blank(),
+        strip.text.x = element_blank(),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"),
+        legend.position = "none")+
+  labs(fill="relative growth")
+
+tbl_clusters %>% 
+  group_by(`Freq + Biol+Silh`) %>% 
+  summarize(n=n()) %>% 
+  pull()
+
+#clustering_object1
+
+plot_kmeans <- cowplot::plot_grid(plot1, plot2, plot3, plot4, plot5, plot6, plot7, ncol = 1, align = "hv", axis = "lr",
+                                  rel_heights = c( 8, 12, 13, 11, 38, 60, 40))
+
+
+ggsave("Figures/plot_kmeans_7_clusters_weights_20231206_1000nstart_final.pdf", plot_kmeans, width = 100, height = 500, units = "mm")
+
+
+##################################################################################################################################
+
+# hierarchical clustering ####
+
+heterochromatin_screen_wide_weights <- heterochromatin_screen_wide %>% 
+  mutate(SUBTEL_FOA=SUBTEL_FOA/2,
+        SUBTEL_URA=SUBTEL_URA/2,
+        TEL_FOA=TEL_FOA/2,
+        TEL_URA=TEL_URA/2)
+
+# cluster 1 ####
+
+cluster1 <- tbl_clusters %>% filter(`Freq + Biol+Silh`==1) %>% pull(gene)
+
+
+  
+
+tbl1 <- heterochromatin_screen_wide  %>% 
+  filter(gene %in% cluster1)
+
+mx1<-as.matrix(tbl1 %>%
+                 select(-(1), -(2)))
+
+rname <- tbl1$gene
+
+rownames(mx1) <- rname
+
+my_dist_1 <- dist(mx1, method = "euclidean") 
+sum(is.na(my_dist_1))
+
+#as.matrix(my_dist_1) %>% View()
+
+clustering_object1<-hclust(my_dist_1)
+
+
+#plot(clustering_object1)
+
+require(dendextend)
+
+
+dend <- as.dendrogram(clustering_object1)
+dend_2 <- flip_leaves(dend,leaves1 = c(11, 10), leaves2 = c(8,9))
+dend_3 <- flip_leaves(dend_2,leaves1 = c(8, 10), leaves2 = c(3,10))
+
+tanglegram(dend_2, dend_3)
+row.ord <- order.dendrogram(dend_3)
+
+orderer_labels1<-clustering_object1$labels[row.ord] 
+
+
+## heatmap
+
+
+gg.dend <- as.ggdend(dend_3 %>% set("branches_lwd", 0.2))
+dend1.plot <- 
+  ggplot(gg.dend,labels=F)+
+  scale_y_reverse()+
+  scale_x_reverse()+
+  coord_flip()+
+  theme(plot.margin = unit(c(1.2, 0, -0.2, 0), "cm"))
+
+#install.packages("ggh4x")
+library(ggh4x)
+
+
+heterochromatin_screen_lft$heterochromatic_region = factor(heterochromatin_screen_lft$heterochromatic_region,levels = c("CEN", "MAT", "SUBTEL", "TEL"))
+
+require(ggplot2)
+map1.plot <- 
+  heterochromatin_screen_lft %>% 
+  filter(gene %in% cluster1 ) %>% 
+  ggplot(aes(x=rest_of_key,y=gene))+
+  geom_tile(aes(fill=aggregated_rel_fitness))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4.87, 4.69))+
+  scale_y_discrete(position="right", limits=rev(orderer_labels1))+
+  # scale_y_discrete(position="right")+
+  facet_nested(.~heterochromatic_region+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(0, 1.8, 0.05, 0), "cm"),
+        strip.background=element_rect(color="gray50", fill = "gray90"),
+        strip.text.x = element_text(size = 5),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"))+
+  labs(fill="relative growth")
+
+
+# cluster 2 ####
+
+cluster2 <- tbl_clusters %>% filter(`Freq + Biol+Silh`==2) %>% pull(gene)
+
+
+tbl1 <- heterochromatin_screen_wide  %>% 
+  filter(gene %in% cluster2)
+
+mx1<-as.matrix(tbl1 %>%
+                 select(-(1), -(2)))
+
+rname <- tbl1$gene
+
+rownames(mx1) <- rname
+
+my_dist_1 <- dist(mx1, method = "euclidean") 
+sum(is.na(my_dist_1))
+
+#as.matrix(my_dist_1) %>% View()
+
+clustering_object1<-hclust(my_dist_1)
+
+#plot(clustering_object1)
+
+dend <- as.dendrogram(clustering_object1)
+row.ord <- order.dendrogram(dend)
+
+orderer_labels1<-clustering_object1$labels[row.ord] 
+
+## heatmap
+
+gg.dend <- as.ggdend(dend %>% set("branches_lwd", 0.2))
+dend2.plot <- 
+  ggplot(gg.dend,labels=F)+
+  scale_y_reverse()+
+  #scale_x_reverse()+
+  coord_flip()+
+  theme(plot.margin = unit(c(0.05, 0, -0.4, 0), "cm"))
+
+
+
+heterochromatin_screen_lft$heterochromatic_region = factor(heterochromatin_screen_lft$heterochromatic_region,levels = c("CEN", "MAT", "SUBTEL", "TEL"))
+
+
+map2.plot <-
+  heterochromatin_screen_lft %>% 
+  filter(gene %in% cluster2 ) %>% 
+  ggplot(aes(x=rest_of_key,y=gene))+
+  geom_tile(aes(fill=aggregated_rel_fitness))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4.87, 4.69))+
+  scale_y_discrete(position="right", limits=orderer_labels1)+
+  # scale_y_discrete(position="right")+
+  facet_nested(.~heterochromatic_region+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(0.05, 1.8, 0.05, 0), "cm"),
+        #strip.background=element_rect(color="gray50", fill = "gray90"),
+        strip.text.x = element_blank(),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"))
+
+# cluster3 ####
+
+cluster3 <- tbl_clusters %>% filter(`Freq + Biol+Silh`==3) %>% pull(gene)
+
+
+tbl1 <- heterochromatin_screen_wide  %>% 
+  filter(gene %in% cluster3)
+
+mx1<-as.matrix(tbl1 %>%
+                 select(-(1), -(2)))
+
+rname <- tbl1$gene
+
+rownames(mx1) <- rname
+
+my_dist_1 <- dist(mx1, method = "euclidean") 
+sum(is.na(my_dist_1))
+
+#as.matrix(my_dist_1) %>% View()
+
+clustering_object1<-hclust(my_dist_1)
+
+#plot(clustering_object1)
+
+dend <- as.dendrogram(clustering_object1)
+row.ord <- order.dendrogram(dend)
+
+orderer_labels1<-clustering_object1$labels[row.ord] 
+
+
+## heatmap
+
+gg.dend <- as.ggdend(dend %>% set("branches_lwd", 0.2))
+dend3.plot <- 
+  ggplot(gg.dend,labels=F)+
+  scale_y_reverse()+
+  #scale_x_reverse()+
+  coord_flip()+
+  theme(plot.margin = unit(c(0.05, 0, -0.4, 0), "cm"))
+
+
+
+heterochromatin_screen_lft$heterochromatic_region = factor(heterochromatin_screen_lft$heterochromatic_region,levels = c("CEN", "MAT", "SUBTEL", "TEL"))
+
+
+map3.plot <- 
+  heterochromatin_screen_lft %>% 
+  filter(gene %in% cluster3 ) %>% 
+  ggplot(aes(x=rest_of_key,y=gene))+
+  geom_tile(aes(fill=aggregated_rel_fitness))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4.87, 4.69))+
+  scale_y_discrete(position="right", limits=orderer_labels1)+
+  # scale_y_discrete(position="right")+
+  facet_nested(.~heterochromatic_region+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(0.05, 1.8, 0.05, 0), "cm"),
+        #strip.background=element_rect(color="gray50", fill = "gray90"),
+        strip.text.x = element_blank(),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"))
+
+
+# cluster 4 ####
+
+cluster4 <- tbl_clusters %>% filter(`Freq + Biol+Silh`==4) %>% pull(gene)
+
+
+tbl1 <- heterochromatin_screen_wide  %>% 
+  filter(gene %in% cluster4)
+
+mx1<-as.matrix(tbl1 %>%
+                 select(-(1), -(2)))
+
+rname <- tbl1$gene
+
+rownames(mx1) <- rname
+
+my_dist_1 <- dist(mx1, method = "euclidean") 
+sum(is.na(my_dist_1))
+
+#as.matrix(my_dist_1) %>% View()
+
+clustering_object1<-hclust(my_dist_1)
+
+#plot(clustering_object1)
+
+dend <- as.dendrogram(clustering_object1)
+row.ord <- order.dendrogram(dend)
+
+orderer_labels1<-clustering_object1$labels[row.ord] 
+
+
+## heatmap
+
+gg.dend <- as.ggdend(dend %>% set("branches_lwd", 0.2))
+dend4.plot <- 
+  ggplot(gg.dend,labels=F)+
+  scale_y_reverse()+
+  #scale_x_reverse()+
+  coord_flip()+
+  theme(plot.margin = unit(c(0.05, 0, -0.4, 0), "cm"))
+
+
+
+heterochromatin_screen_lft$heterochromatic_region = factor(heterochromatin_screen_lft$heterochromatic_region,levels = c("CEN", "MAT", "SUBTEL", "TEL"))
+
+
+map4.plot <- 
+  heterochromatin_screen_lft %>% 
+  filter(gene %in% cluster4 ) %>% 
+  ggplot(aes(x=rest_of_key,y=gene))+
+  geom_tile(aes(fill=aggregated_rel_fitness))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4.87, 4.69))+
+  scale_y_discrete(position="right", limits=orderer_labels1)+
+  # scale_y_discrete(position="right")+
+  facet_nested(.~heterochromatic_region+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(0.05, 1.6, 0.05, 0), "cm"),
+        #strip.background=element_rect(color="gray50", fill = "gray90"),
+        strip.text.x = element_blank(),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"))
+
+
+# plot_grid(dend2.plot, map2.plot, align='h', rel_widths=c(0.2,1), scale=c(1.14,1))
+# #ggsave("Figures/cluster2.pdf", width=10, height=4.5, limitsize = FALSE)
+
+# cluster 5 ####
+
+cluster5 <- tbl_clusters %>% filter(`Freq + Biol+Silh`==5) %>% pull(gene)
+
+
+tbl1 <- heterochromatin_screen_wide  %>% 
+  filter(gene %in% cluster5)
+
+mx1<-as.matrix(tbl1 %>%
+                 select(-(1), -(2)))
+
+rname <- tbl1$gene
+
+rownames(mx1) <- rname
+
+my_dist_1 <- dist(mx1, method = "euclidean") 
+sum(is.na(my_dist_1))
+
+#as.matrix(my_dist_1) %>% View()
+
+clustering_object1<-hclust(my_dist_1)
+
+#plot(clustering_object1)
+
+dend <- as.dendrogram(clustering_object1)
+row.ord <- order.dendrogram(dend)
+
+orderer_labels1<-clustering_object1$labels[row.ord] 
+
+
+## heatmap
+
+gg.dend <- as.ggdend(dend %>% set("branches_lwd", 0.2))
+dend5.plot <- 
+  ggplot(gg.dend,labels=F)+
+  scale_y_reverse()+
+  #scale_x_reverse()+
+  coord_flip()+
+  theme(plot.margin = unit(c(0.05, 0, -0.4, 0), "cm"))
+
+
+
+heterochromatin_screen_lft$heterochromatic_region = factor(heterochromatin_screen_lft$heterochromatic_region,levels = c("CEN", "MAT", "SUBTEL", "TEL"))
+
+
+map5.plot <- 
+  heterochromatin_screen_lft %>% 
+  filter(gene %in% cluster5 ) %>% 
+  ggplot(aes(x=rest_of_key,y=gene))+
+  geom_tile(aes(fill=aggregated_rel_fitness))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4.87, 4.69))+
+  scale_y_discrete(position="right", limits=orderer_labels1)+
+  # scale_y_discrete(position="right")+
+  facet_nested(.~heterochromatic_region+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(0.05, 1, 0.05, 0), "cm"),
+        #strip.background=element_rect(color="gray50", fill = "gray90"),
+        strip.text.x = element_blank(),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"))
+
+# cluster 6 ####
+
+cluster6 <- tbl_clusters %>% filter(`Freq + Biol+Silh`==6) %>% pull(gene)
+
+
+tbl1 <- heterochromatin_screen_wide  %>% 
+  filter(gene %in% cluster6)
+
+mx1<-as.matrix(tbl1 %>%
+                 select(-(1), -(2)))
+
+rname <- tbl1$gene
+
+rownames(mx1) <- rname
+
+my_dist_1 <- dist(mx1, method = "euclidean") 
+sum(is.na(my_dist_1))
+
+#as.matrix(my_dist_1) %>% View()
+
+clustering_object1<-hclust(my_dist_1)
+
+#plot(clustering_object1)
+
+dend <- as.dendrogram(clustering_object1)
+row.ord <- order.dendrogram(dend)
+
+orderer_labels1<-clustering_object1$labels[row.ord] 
+
+
+## heatmap
+
+gg.dend <- as.ggdend(dend %>% set("branches_lwd", 0.2))
+dend6.plot <- 
+  ggplot(gg.dend,labels=F)+
+  scale_y_reverse()+
+  #scale_x_reverse()+
+  coord_flip()+
+  theme(plot.margin = unit(c(0.05, 0, -0.4, 0), "cm"))
+
+
+
+heterochromatin_screen_lft$heterochromatic_region = factor(heterochromatin_screen_lft$heterochromatic_region,levels = c("CEN", "MAT", "SUBTEL", "TEL"))
+
+
+map6.plot <- 
+  heterochromatin_screen_lft %>% 
+  filter(gene %in% cluster6) %>% 
+  ggplot(aes(x=rest_of_key,y=gene))+
+  geom_tile(aes(fill=aggregated_rel_fitness))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4.87, 4.69))+
+  scale_y_discrete(position="right", limits=orderer_labels1)+
+  # scale_y_discrete(position="right")+
+  facet_nested(.~heterochromatic_region+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(0.05, 1, 0.05, 0), "cm"),
+        #strip.background=element_rect(color="gray50", fill = "gray90"),
+        strip.text.x = element_blank(),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"))
+
+
+# cluster 7 ####
+
+cluster7 <- tbl_clusters %>% filter(`Freq + Biol+Silh`==7) %>% pull(gene)
+
+
+tbl1 <- heterochromatin_screen_wide  %>% 
+  filter(gene %in% cluster7)
+
+mx1<-as.matrix(tbl1 %>%
+                 select(-(1), -(2)))
+
+rname <- tbl1$gene
+
+rownames(mx1) <- rname
+
+my_dist_1 <- dist(mx1, method = "euclidean") 
+sum(is.na(my_dist_1))
+
+#as.matrix(my_dist_1) %>% View()
+
+clustering_object1<-hclust(my_dist_1)
+
+#plot(clustering_object1)
+
+dend <- as.dendrogram(clustering_object1)
+row.ord <- order.dendrogram(dend)
+
+orderer_labels1<-clustering_object1$labels[row.ord] 
+
+
+## heatmap
+
+gg.dend <- as.ggdend(dend %>% set("branches_lwd", 0.2))
+dend7.plot <- 
+  ggplot(gg.dend,labels=F)+
+  scale_y_reverse()+
+  #scale_x_reverse()+
+  coord_flip()+
+  theme(plot.margin = unit(c(0.05, 0, -0.4, 0), "cm"))
+
+
+
+heterochromatin_screen_lft$heterochromatic_region = factor(heterochromatin_screen_lft$heterochromatic_region,levels = c("CEN", "MAT", "SUBTEL", "TEL"))
+
+
+map7.plot <- 
+  heterochromatin_screen_lft %>% 
+  filter(gene %in% cluster7 ) %>% 
+  ggplot(aes(x=rest_of_key,y=gene))+
+  geom_tile(aes(fill=aggregated_rel_fitness))+
+  scale_fill_gradient2(low = "dodgerblue4", high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4.87, 4.69))+
+  scale_y_discrete(position="right", limits=orderer_labels1)+
+  # scale_y_discrete(position="right")+
+  facet_nested(.~heterochromatic_region+medium,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # margin: top, right, bottom, and left
+        plot.margin = unit(c(0.05, 1, 0.05, 0), "cm"),
+        #strip.background=element_rect(color="gray50", fill = "gray90"),
+        strip.text.x = element_blank(),
+        panel.spacing=unit(0, "mm"),
+        panel.border=element_rect(color="gray70"))
+
+
+
+# together ####
+
+# my_legend <- get_legend(map1.plot + theme(legend.position="bottom",
+#                                           legend.key.size = unit(0.3, "cm"),
+#                                           plot.margin = unit(c(0, 0, 0, 0), "cm")))  # megszerzem a legend-et
+
+
+heatmap1_V2<-map1.plot + theme(legend.position="none", axis.ticks = element_blank())
+
+heatmap2_V2<-map2.plot + theme(legend.position="none", axis.ticks = element_blank())
+heatmap3_V2<-map3.plot + theme(legend.position="none", axis.ticks = element_blank())
+heatmap4_V2<-map4.plot + theme(legend.position="none", axis.ticks = element_blank())
+heatmap5_V2<-map5.plot + theme(legend.position="none", axis.ticks = element_blank())
+heatmap6_V2<-map6.plot + theme(legend.position="none", axis.ticks = element_blank())# a 2-es verziorol torlom a legend-et
+heatmap7_V2<-map7.plot + theme(legend.position="none", axis.ticks = element_blank())
+
+library(cowplot)
+
+combi1<-cowplot::plot_grid( dend1.plot, heatmap1_V2, nrow=1, align='h', rel_widths = c(0.2, 1), scale=c(1.1,1))+
+  draw_label("Cluster I", x = 0.97, y = 0.4, hjust = 0.5, vjust = 1, angle = 270, size = 8) 
+
+combi2<-cowplot::plot_grid( dend2.plot, heatmap2_V2, nrow=1, align = 'h', rel_widths = c(0.2, 1), scale=c(1.05,1))+
+  draw_label("Cluster II", x = 0.97, y = 0.5, hjust = 0.5, vjust = 1, angle = 270, size = 8) 
+
+combi3<-cowplot::plot_grid( dend3.plot, heatmap3_V2, nrow=1, align = 'h', rel_widths = c(0.2, 1), scale=c(1.05,1))+
+  draw_label("Cluster III", x = 0.97, y = 0.4, hjust = 0.5, vjust = 1, angle = 270, size = 8) 
+
+combi4<-cowplot::plot_grid( dend4.plot, heatmap4_V2, nrow=1, align = 'h', rel_widths = c(0.2, 1), scale=c(1.05,1))+
+  draw_label("Cluster IV", x = 0.97, y = 0.5, hjust = 0.5, vjust = 1, angle = 270, size = 8) 
+
+combi5<-cowplot::plot_grid( dend5.plot, heatmap5_V2, nrow=1, align = 'h', rel_widths = c(0.2, 1), scale=c(1.05,1))+
+  draw_label("Cluster V", x = 0.97, y = 0.45, hjust = 0.5, vjust = 1, angle = 270, size = 8) 
+
+combi6<-cowplot::plot_grid( dend6.plot, heatmap6_V2, nrow=1, align = 'h', rel_widths = c(0.2, 1), scale=c(1.05,1))+
+  draw_label("Cluster VI", x = 0.97, y = 0.5, hjust = 0.5, vjust = 1, angle = 270, size = 8) 
+
+combi7<-cowplot::plot_grid( dend7.plot, heatmap7_V2, nrow=1, align = 'h', rel_widths = c(0.2, 1), scale=c(1.05,1))+
+  draw_label("Cluster VII", x = 0.97, y = 0.5, hjust = 0.5, vjust = 1, angle = 270, size = 8) 
+
+plot_together<-cowplot::plot_grid(combi1, combi2, combi3 ,combi4, combi5, combi6, combi7, ncol = 1, rel_heights=c(10, 12, 13, 11, 38, 60, 40))
+
+
+#plot_together
+
+#ggsave(plot_together, file="Figures/figure2_100screens_threshold_imr3_others2point5_kmeans_and_hierarchical_weights.pdf", width = 170, height = 400, units = "mm")
+
+ggsave(plot_together, file="Figures/figure2_100screens_threshold_imr3_others2point5_kmeans_and_hierarchical.pdf", width = 170, height = 400, units = "mm")
+
+
+
