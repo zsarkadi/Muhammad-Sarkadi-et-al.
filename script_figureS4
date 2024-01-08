@@ -1,0 +1,638 @@
+library(tidyverse)
+
+setwd("D:/documents/Heterochromatin_screen/analysis/Heterochromatin_screen_R/PUBLICATION")
+tbl_strain_wrong <- read_csv("gene_red_list_v3.csv")
+tbl_big <- read_csv("DataDerived/screens_100screens_S19_S30_removed.csv")
+
+tbl_library <- read_csv("data/8_plate_library.csv")
+
+tbl_gene_names <- read_csv("data/gene_IDs_names_products_dowloaded_2023_09_12.csv")
+
+tbl_s1 <- left_join(
+  tbl_library %>% select(ORF, mutID, plate, pos, `384 pos`) %>% 
+    rename(gene_systematic_id=ORF) %>% 
+    filter(gene_systematic_id!="#N/A"), 
+  tbl_gene_names
+)
+
+#write_csv(tbl_s1, "DataDerived/table_S1_library_positions.csv")
+
+#tbl_gene_IDs_names <- read_tsv("gene_IDs_names.tsv", skip = 1, col_names = TRUE) # gene names downloaded from pombase on 2023_08_15
+
+#write_csv(tbl_gene_IDs_names, "DataDerived/tbl_gene_IDs_names_downloaded_from_pombase_20230815.csv")
+
+
+
+tbl_big %>%  #2985
+  filter(grepl("\\*", gene)) %>% 
+  pull(gene)
+#"ccr1*"   "gst3*"   "lcf1*"   "met10*"  "myo1*"   "nup132*" "poz1*"   "sap14*"  "srb10*"  "swi6*"   "trx2*"  
+
+# remove genes (non-star) that have a star-labelled pair 
+
+list_gene_to_remove <- tbl_big %>% 
+  filter(gene %in% c("ccr1", "gst3", "lcf1", "met10", "myo1", "nup132", "poz1", "sap14", "srb10", "swi6", "trx2")) %>% 
+  pull(gene)
+
+tbl_big <- tbl_big %>%
+  filter(!gene %in% list_gene_to_remove)
+
+
+## log2
+
+heterochromatin_screens_log2_tbl<-
+  tbl_big %>%
+  mutate_at(.vars = setdiff(names(tbl_big), c("gene"  , "systematic_ID" )),
+            .funs = function(x)
+            {
+              y <- log2(x)
+              ifelse(is.finite(y), y, NA)
+            }
+  )
+colnames(heterochromatin_screens_log2_tbl)
+
+#tbl_log2 %>% group_by(gene) %>%  summarise(n=n()) %>% arrange(desc( n))
+
+#write_csv(tbl_log2, "DataDerived/screen_data_tableS1_20230815_updated_names.csv") # Table S1
+
+
+##############################################xx hits #########################################################x
+
+
+regexp1<-"^([^_]+)_([^_]+)_([^_]+)_([^_]+)_([^_]+)$"
+regexp2<-"^(.+)\\.([1234])$"
+heterochromatin_screen_lft<-heterochromatin_screens_log2_tbl %>% 
+  #select(-systematic_ID) %>% 
+  gather(key="key", value="relative_fitness",  -gene, -systematic_ID) %>% 
+  mutate(
+    heterochromatic_region=gsub(regexp1,"\\1", key),
+    medium=gsub(regexp1,"\\2", key),
+    rest_of_key=gsub(regexp1,"\\3_\\4_\\5", key)
+  ) %>% 
+  mutate(
+    technical_replicate_id=gsub(regexp2,"\\2", rest_of_key),
+    rest_of_key=gsub(regexp2,"\\1", rest_of_key)
+  ) %>% 
+  select(-key)
+
+
+stopifnot(all(grepl("^[1234]$",heterochromatin_screen_lft$technical_replicate_id)))  # each key ends with a dot and a number e.g.  ".1"
+
+
+##I take the mean of 2 technical replicates  of the same day
+heterochromatin_screen_lft_mean<-
+  heterochromatin_screen_lft %>%
+  group_by( gene, systematic_ID, heterochromatic_region, medium, rest_of_key   ) %>% 
+  summarise(aggregated_rel_fitness=mean(relative_fitness, na.rm=TRUE), .groups="drop" ) 
+
+
+sd_tbl<-heterochromatin_screen_lft_mean %>%
+  group_by( gene, systematic_ID, heterochromatic_region, medium  ) %>% 
+  summarise(mean_fitness= median(aggregated_rel_fitness, na.rm=TRUE), .groups="drop" ) %>%
+  group_by( heterochromatic_region, medium  ) %>% 
+  summarise(sd_of_fitness= sd(mean_fitness, na.rm=TRUE), mean_of_fitness= mean(mean_fitness, na.rm=TRUE) ,.groups="drop" )
+#write_csv(sd_tbl,"out/sd_tbl.csv")
+
+# long format table
+heterochromatin_screen_lft2<-
+  left_join(heterochromatin_screen_lft_mean , sd_tbl, by = c("heterochromatic_region", "medium")) %>% 
+  mutate(scaled_fitness=(aggregated_rel_fitness-mean_of_fitness)/sd_of_fitness) %>%
+  #mutate(scaled_fitness=(aggregated_rel_fitness-mean_of_fitness)) %>% 
+  select(-aggregated_rel_fitness,-sd_of_fitness,-mean_of_fitness)
+
+
+###############
+my_t_test<-function(x)
+{ x<-x[is.finite(x)]
+if(length(x)>=2){
+  p<-t.test(x)$p.value
+}else{
+  p<-NA
+}
+return(p)
+}
+###############
+
+tbl1<-
+  heterochromatin_screen_lft2 %>%  spread(key="medium", value="scaled_fitness") %>% 
+  mutate(score=URA-FOA) %>% 
+  group_by( gene, systematic_ID, heterochromatic_region) %>% 
+  summarise(p_value=my_t_test(score), 
+            URA_minus_FOA_score=median(score, na.rm=TRUE) ,
+            URA=median(URA, na.rm=TRUE),
+            FOA=median(FOA, na.rm=TRUE),
+            n= sum(is.finite(score)),
+            .groups="drop")
+#write_csv(tbl1, "out_Zsuzsa/hits_20221213.csv")
+
+#tbl1 %>%  select(-n) %>% spread(key="medium", value="fitness")
+
+tbl_hits_silencing_sum <- tbl1 %>% 
+  mutate(URA_minus_FOA_score=round(URA_minus_FOA_score, digits = 2)) %>% 
+  mutate(hit_silencing=case_when(heterochromatic_region=="imr" & URA_minus_FOA_score>=3 & p_value<0.05~1,
+                                 heterochromatic_region!="imr" & URA_minus_FOA_score>=2.5 & p_value<0.05~1,
+                                        TRUE~0)) %>%
+  mutate(hit_antisilencing=case_when(heterochromatic_region=="imr" & URA_minus_FOA_score<=(-3) & p_value<0.05~1,
+                                     heterochromatic_region!="imr" & URA_minus_FOA_score<=(-2) & p_value<0.05~1,
+                                     TRUE~0)) %>%
+  group_by(heterochromatic_region, hit_silencing) %>% 
+  summarise(number_of_hit_silencing=sum(hit_silencing)) %>% 
+  filter(hit_silencing==1) %>% 
+  select(-hit_silencing)
+
+tbl_hits_antisilencing_sum <- tbl1 %>% 
+  mutate(URA_minus_FOA_score=round(URA_minus_FOA_score, digits = 2)) %>% 
+  mutate(hit_silencing=case_when(heterochromatic_region=="imr" & URA_minus_FOA_score>=3 & p_value<0.05~1,
+                                 heterochromatic_region!="imr" & URA_minus_FOA_score>=2.5 & p_value<0.05~1,
+                                 TRUE~0)) %>%
+  mutate(hit_antisilencing=case_when(heterochromatic_region=="imr" & URA_minus_FOA_score<=(-3) & p_value<0.05~1,
+                                     heterochromatic_region!="imr" & URA_minus_FOA_score<=(-2) & p_value<0.05~1,
+                                     TRUE~0)) %>%
+  group_by(heterochromatic_region, hit_antisilencing) %>% 
+  summarise(number_of_hit_antisilencing=sum(hit_antisilencing)) %>% 
+  filter(hit_antisilencing==1) %>% 
+  select(-hit_antisilencing)
+
+tbl_hit_numbers <- left_join(tbl_hits_silencing_sum,tbl_hits_antisilencing_sum )
+  
+tbl_hits <- left_join(tbl1, tbl_hit_numbers) %>% 
+  mutate(URA_minus_FOA_score=round(URA_minus_FOA_score, digits = 2)) %>% 
+  mutate(hit_silencing=case_when(heterochromatic_region=="imr" & URA_minus_FOA_score>=3 & p_value<0.05~1,
+                                 heterochromatic_region!="imr" & URA_minus_FOA_score>=2.5 & p_value<0.05~1,
+                                 TRUE~0)) %>%
+  mutate(hit_antisilencing=case_when(heterochromatic_region=="imr" & URA_minus_FOA_score<=(-3) & p_value<0.05~1,
+                                     heterochromatic_region!="imr" & URA_minus_FOA_score<=(-2) & p_value<0.05~1,
+                                     TRUE~0))
+
+#write_csv(tbl_hits,"DataDerived/hits_updated_names_final.csv")
+
+#for suppl. table
+
+tbl_hits %>% 
+  filter(grepl("\\*", systematic_ID))
+
+tbl_hits$systematic_ID <- gsub("\\*", "", tbl_hits$systematic_ID)
+
+tbl_hits_tableS3 <- tbl_hits %>% 
+  mutate(heterochromatic_region=case_when(heterochromatic_region=="imr"~"CEN",
+                                          heterochromatic_region=="mat"~"MAT",
+                                          heterochromatic_region=="subtel"~"SUBTEL",
+                                          heterochromatic_region=="tel"~"TEL")) %>% 
+  select(-number_of_hit_silencing, -number_of_hit_antisilencing)
+
+#write_csv(tbl_hits_tableS3, "DataDerived/hits_tableS3_final.csv")
+
+tbl_hits_filt <- tbl_hits %>% 
+  filter(hit_silencing==1 | hit_antisilencing==1) %>% 
+  select(-number_of_hit_silencing, -number_of_hit_antisilencing)
+
+
+#write_csv(tbl_hits_filt,"DataDerived/hits_filtered_table_S2_updated_names_final.csv")
+
+# known factors ###################
+
+known_HC_factors_tbl<-read_csv("known_silencing_and_antisilencing_factors_v2.csv",col_types = cols(
+  Gene = col_character(),
+  `Parental GO ID` = col_character(),
+  `Parental GO term name` = col_character(),
+  `Child-term GO ID` = col_character(),
+  `Child-term GO term name` = col_character(),
+  comment = col_character(),
+  Evidence = col_character(),
+  Reference = col_character(),
+  `Silencing factor` = col_logical(),
+  `Antisilencing factor` = col_logical(),
+  `Present in library` = col_logical(),
+  `Correct mutant` = col_character()
+))
+#I use this for script4 (ZS)
+known_HC_factors_tbl_wAntisilencing <- known_HC_factors_tbl
+
+known_HC_factors_tbl<-known_HC_factors_tbl %>%
+  mutate_at(.vars = c("Silencing factor","Antisilencing factor","Present in library"),
+            .funs = function(x) {if_else(is.na(x),FALSE,x)})
+
+
+known_HC_factors_tbl<-known_HC_factors_tbl %>%
+  mutate(`Term name`=   case_when(
+    #`Child-term GO term name` == "chromosome, subtelomeric region"~ "chromosome, subtelomeric region",
+    `Parental GO term name`=="chromosome, telomeric region" ~ "chromosome, telomeric region",
+    TRUE~`Child-term GO term name`)) %>% 
+  rename(gene=Gene)
+
+#helper_tbl1<-tribble(~heterochromatic_region, ~`Term name`,
+helper_tbl1<-tribble(~heterochromatic_region, ~`Term name`,
+                     "imr","pericentric heterochromatin",
+                     "mat","mating-type region heterochromatin",
+                     "tel","chromosome, telomeric region",
+                     "subtel","chromosome, telomeric region")
+known_HC_factors_tbl<-known_HC_factors_tbl %>% left_join(helper_tbl1, by = "Term name")
+rm(helper_tbl1)
+
+list_known_silencing_factors <- known_HC_factors_tbl %>% 
+  filter(`Silencing factor`==TRUE) %>% 
+  pull(gene) %>% 
+  unique()
+
+list_known_antisilencing_factors <- known_HC_factors_tbl %>% 
+  filter(`Antisilencing factor`==TRUE) %>% 
+  pull(gene) %>% 
+  unique()
+
+# remove stars
+tbl_hits$gene <- gsub("swi6\\*", "swi6", tbl_hits$gene)
+tbl_hits$gene <- gsub("sap14\\*", "sap14", tbl_hits$gene)
+tbl_hits$gene <- gsub("poz1\\*", "poz1", tbl_hits$gene)
+
+tbl_hits <- tbl_hits %>% 
+  mutate(known_silencing_factor=case_when(gene %in% list_known_silencing_factors~1,
+                                          TRUE~0)) %>% 
+  mutate(known_antisilencing_factor=case_when(gene %in% list_known_antisilencing_factors~1,
+                                              TRUE~0))
+
+# plot ####
+
+#my_colors<-c("antisilencing factor"="green", "silencing factor"="red", "no"="black"  )
+tbl_hits <- tbl_hits %>% 
+  mutate(heterochromatic_region_label=case_when(heterochromatic_region=="imr"~"CEN",
+                       heterochromatic_region=="mat"~"MAT",
+                       heterochromatic_region=="subtel"~"SUBTEL",
+                       heterochromatic_region=="tel"~"TEL"))
+
+#write_csv(tbl_hits, "DataDerived/hits_100_screens_CEN3_others_2point5_final.csv")
+
+plot_a <- tbl_hits %>%
+  ggplot(mapping = aes(x=URA, y=FOA)) +
+  geom_point(size=0.2, color="gray70")+
+  geom_vline(xintercept = 0, linetype="dashed", color="gray")+
+  geom_hline(yintercept = 0, linetype="dashed", color="gray")+
+  geom_point(data = tbl_hits %>%  
+               filter(known_silencing_factor==1) %>% 
+               filter(hit_silencing==1), color="blue", size=0.2)+
+  ggrepel::geom_text_repel(data = tbl_hits %>%  
+                             filter(known_silencing_factor==1) %>% 
+                             filter(hit_silencing==1),
+                           mapping = aes(label=gene) , size=2.5 , 
+                           segment.size = 0.2, segment.color = "blue",
+                           color="blue", max.overlaps = 100)+
+  #scale_color_manual(values = my_colors)+
+  #coord_equal(ratio = 1)+
+  facet_wrap(.~factor(heterochromatic_region_label, levels = c(
+    "CEN", "MAT", "SUBTEL", "TEL")), ncol = 1)+
+  #theme(strip.text =  element_blank())+
+  theme_bw()+
+  theme(legend.position = "none",
+        axis.title = element_text(size=8),
+        axis.text = element_text(size=5),
+        strip.text = element_text(size = 8))
+#plot.margin = unit(c(0,0,0,0), "cm")),
+
+library("scales")
+reverselog_trans <- function(base = 10) {
+  trans <- function(x) -log(x, base)
+  inv <- function(x) base^(-x)
+  trans_new(paste0("reverselog-", format(base)), trans, inv, 
+            log_breaks(base = base), 
+            domain = c(1e-100, Inf))
+}
+
+
+
+tbl_hits_numbers <- tbl_hits %>% 
+  select(heterochromatic_region, heterochromatic_region_label, number_of_hit_silencing, number_of_hit_antisilencing) %>% 
+  distinct()
+
+
+# for plot c ####
+
+
+
+#top20
+
+top_imr <- tbl_hits %>% 
+  filter(heterochromatic_region=="imr") %>% 
+  filter(p_value<0.05) %>% 
+  arrange(desc(URA_minus_FOA_score)) %>%
+  top_n(20, URA_minus_FOA_score) %>%
+  pull(gene)
+
+top_mat <- tbl_hits %>% 
+  filter(heterochromatic_region=="mat") %>% 
+  filter(p_value<0.05) %>% 
+  arrange(desc(URA_minus_FOA_score)) %>%
+  top_n(20, URA_minus_FOA_score) %>%
+  pull(gene)
+
+top_subtel <- tbl_hits %>% 
+  filter(heterochromatic_region=="subtel") %>% 
+  filter(p_value<0.05) %>% 
+  arrange(desc(URA_minus_FOA_score)) %>%
+  top_n(20, URA_minus_FOA_score) %>%
+  pull(gene)
+
+top_tel <- tbl_hits %>% 
+  filter(heterochromatic_region=="tel") %>% 
+  filter(p_value<0.05) %>% 
+  arrange(desc(URA_minus_FOA_score)) %>%
+  top_n(20, URA_minus_FOA_score) %>%
+  pull(gene)
+
+# top 20 antisilencing
+
+top_imr_antis <- tbl_hits %>% 
+  filter(heterochromatic_region=="imr") %>% 
+  filter(p_value<0.05) %>% 
+  arrange(URA_minus_FOA_score) %>%
+  top_n(-20, URA_minus_FOA_score) %>%
+  pull(gene)
+
+top_mat_antis <- tbl_hits %>% 
+  filter(heterochromatic_region=="mat") %>% 
+  filter(p_value<0.05) %>% 
+  arrange(URA_minus_FOA_score) %>% 
+  top_n(-20, URA_minus_FOA_score) %>%
+  pull(gene)
+
+top_subtel_antis <- tbl_hits %>% 
+  filter(hit_antisilencing==1) %>% 
+  filter(heterochromatic_region=="subtel") %>% 
+  filter(p_value<0.05) %>% 
+  arrange(URA_minus_FOA_score) %>% 
+  top_n(-20, URA_minus_FOA_score) %>%
+  pull(gene)
+
+top_tel_antis <- tbl_hits %>% 
+  filter(heterochromatic_region=="tel") %>% 
+  filter(p_value<0.05) %>% 
+  arrange(URA_minus_FOA_score) %>% 
+  top_n(-20, URA_minus_FOA_score) %>%
+  pull(gene)
+
+
+require(ggplot2)
+
+
+label <- c("FOA", "FOA", "FOA", "FOA", "FOA", "FOA", "FOA", "FOA",
+           "URA", "URA", "URA", "URA", "URA", "URA", "URA", "URA")
+
+label_subtel <- c("FOA", "FOA", "FOA", "FOA", "FOA", "FOA",
+                  "URA", "URA", "URA", "URA", "URA", "URA")
+
+
+heterochromatin_screen_lft_mean <- heterochromatin_screen_lft_mean %>% 
+  mutate(heterochromatic_region_label=case_when(heterochromatic_region=="imr"~"CEN",
+                                                heterochromatic_region=="mat"~"MAT",
+                                                heterochromatic_region=="subtel"~"SUBTEL",
+                                                heterochromatic_region=="tel"~"TEL")) 
+
+
+
+
+heterochromatin_screen_lft_mean_2 <- left_join(heterochromatin_screen_lft_mean, tbl_hits_filt) %>% 
+  filter(!gene %in% c("swi6", "sap14"))
+
+
+
+
+
+library(ggh4x)
+library(ggpubr)
+
+heterochromatin_screen_lft_mean_2 <- heterochromatin_screen_lft_mean_2 %>% 
+  group_by(gene, heterochromatic_region, medium) %>% 
+  mutate(n=n()) %>% 
+  mutate(n=as.character(paste0("n=",n)))
+
+
+plot_c <- ggarrange(
+  heterochromatin_screen_lft_mean_2 %>% 
+    filter(heterochromatic_region_label=="CEN", gene %in% top_imr ) %>%
+    ggplot(aes(x=rest_of_key, y=fct_reorder(gene, (URA_minus_FOA_score)), label=n))+
+    geom_tile(aes(fill=aggregated_rel_fitness))+
+    scale_fill_gradient2(low = "dodgerblue4", 
+                         high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4,5))+
+    scale_x_discrete(labels=label)+
+    theme(
+      axis.title.x = element_text(size=7),
+          axis.text.x = element_blank(),
+          axis.text.y=element_text(size = 7),
+          strip.text = element_text(size=8),
+          axis.ticks = element_blank(),
+          legend.key.size = unit(0.3, 'cm'),
+          legend.key.width = unit(0.4, 'cm'),
+          legend.title = element_text (size = 8),
+          legend.position = "none",
+          panel.background = element_blank(),
+          #plot.margin = margin(0,0,1,unit = "cm")
+          )+
+    facet_nested(.~heterochromatic_region_label+medium, space = "free", scales = "free")+
+    ylab("")+
+    xlab(heterochromatin_screen_lft_mean_2 %>% 
+           filter(heterochromatic_region_label=="CEN", gene %in% top_imr ) %>%
+           pull(n) %>% 
+           unique()),
+   
+  
+  heterochromatin_screen_lft_mean_2 %>% 
+    filter(heterochromatic_region_label=="MAT", gene %in% top_mat ) %>% 
+    ggplot(aes(x=rest_of_key, y=fct_reorder(gene, (URA_minus_FOA_score))))+
+    geom_tile(aes(fill=aggregated_rel_fitness))+
+    scale_fill_gradient2(low = "dodgerblue4", 
+                         high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4,5))+
+    scale_x_discrete(labels=label)+
+    theme(
+      axis.title.x = element_text(size=7),
+          axis.text.x = element_blank(),
+          axis.text.y=element_text(size = 7),
+          strip.text = element_text(size=8),
+          axis.ticks = element_blank(),
+          legend.key.size = unit(0.3, 'cm'),
+          legend.key.width = unit(0.4, 'cm'),
+          legend.title = element_text (size = 8),
+          legend.position = "none",
+          panel.background = element_blank())+
+    facet_nested(.~heterochromatic_region_label+medium, space = "free", scales = "free")+
+    ylab("")+
+    xlab(heterochromatin_screen_lft_mean_2 %>% 
+           filter(heterochromatic_region_label=="MAT", gene %in% top_mat ) %>% 
+           pull(n) %>% 
+           unique()),
+  
+  heterochromatin_screen_lft_mean_2 %>% 
+    filter(heterochromatic_region_label=="SUBTEL", gene %in% top_subtel ) %>%
+    ggplot(aes(x=rest_of_key, y=fct_reorder(gene, (URA_minus_FOA_score))))+
+    geom_tile(aes(fill=aggregated_rel_fitness))+
+    scale_fill_gradient2(low = "dodgerblue4", 
+                         high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4,5))+
+    scale_x_discrete(labels=label)+
+    theme(
+      axis.title.x = element_text(size = 7),
+          axis.text.x = element_blank(),
+          axis.text.y=element_text(size = 7),
+          strip.text = element_text(size=8),
+          axis.ticks = element_blank(),
+          legend.key.size = unit(0.3, 'cm'),
+          legend.key.width = unit(0.4, 'cm'),
+          legend.title = element_text (size = 8),
+          legend.position = "none",
+          panel.background = element_blank())+
+    facet_nested(.~heterochromatic_region_label+medium, space = "free", scales = "free")+
+    ylab("")+
+    xlab(heterochromatin_screen_lft_mean_2 %>% 
+           filter(heterochromatic_region_label=="SUBTEL", gene %in% top_subtel ) %>% 
+           pull(n) %>% 
+           unique()),
+  
+  heterochromatin_screen_lft_mean_2 %>% 
+    filter(heterochromatic_region_label=="TEL", gene %in% top_tel )  %>%
+    ggplot(aes(x=rest_of_key, y=fct_reorder(gene, (URA_minus_FOA_score))))+
+    geom_tile(aes(fill=aggregated_rel_fitness))+
+    scale_fill_gradient2(low = "dodgerblue4", 
+                         high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4,5))+
+    scale_x_discrete(labels=label)+
+    labs(fill="relative\ngrowth")+
+    theme(
+      axis.title.x = element_text(size = 7),
+          axis.text.x = element_blank(),
+          axis.text.y=element_text(size = 7),
+          axis.ticks = element_blank(),
+          legend.key.size = unit(0.25, 'cm'),
+          legend.key.width = unit(0.25, 'cm'),
+          legend.title = element_text(size = 7),
+          legend.text = element_text(size=6),
+          strip.text = element_text(size=8),
+          panel.background = element_blank())+
+    facet_nested(.~heterochromatic_region_label+medium, space = "free", scales = "free")+
+    ylab("")+
+    xlab(heterochromatin_screen_lft_mean_2 %>% 
+           filter(heterochromatic_region_label=="TEL", gene %in% top_tel ) %>% 
+           pull(n) %>% 
+           unique()),
+  nrow = 1, widths = c(8,8,7,11), labels = "d")
+
+# pdf("Figures/figure1_panel_c.pdf")
+# plot_c
+#dev.off()
+
+
+
+
+library(ggpubr)
+
+plot_a_b <-ggarrange(plot_a, plot_b, ncol=2, widths=c(1,1.5), labels = c("b", "c"))
+
+plot <- ggarrange( plot_a_b, plot_c, ncol=1, heights = c( 1, 0.5), widths = c(0.2,1))
+
+ggsave("Figures/figure1_100screens_threshold_imr3_others_2point5_v2.pdf", plot, width = 170, height = 200, units = "mm", device = "pdf")
+
+
+# supplementary Figure S4 ####
+
+plot_supplement <- ggarrange(
+  heterochromatin_screen_lft_mean_2 %>%
+    filter(heterochromatic_region_label=="CEN", gene %in% top_imr_antis ) %>%
+    ggplot(aes(x=rest_of_key, y=fct_reorder(gene, (URA_minus_FOA_score)), label=n))+
+    geom_tile(aes(fill=aggregated_rel_fitness))+
+    scale_fill_gradient2(low = "dodgerblue4", 
+                         high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-5.1,3))+
+    scale_x_discrete(labels=label)+
+    theme(
+      axis.title.x = element_text(size=7),
+      axis.text.x = element_blank(),
+      axis.text.y=element_text(size = 7),
+      strip.text = element_text(size=8),
+      axis.ticks = element_blank(),
+      legend.key.size = unit(0.3, 'cm'),
+      legend.key.width = unit(0.4, 'cm'),
+      legend.title = element_text (size = 8),
+      legend.position = "none",
+      panel.background = element_blank(),
+      #plot.margin = margin(0,0,1,unit = "cm")
+    )+
+    facet_nested(.~heterochromatic_region_label+medium, space = "free", scales = "free")+
+    ylab("")+
+    xlab(heterochromatin_screen_lft_mean_2 %>% 
+           filter(heterochromatic_region_label=="CEN", gene %in% top_imr ) %>%
+           pull(n) %>% 
+           unique()),
+
+  heterochromatin_screen_lft_mean_2 %>%
+    filter(heterochromatic_region_label=="MAT", gene %in% top_mat_antis ) %>%
+    ggplot(aes(x=rest_of_key, y=fct_reorder(gene, (URA_minus_FOA_score))))+
+    geom_tile(aes(fill=aggregated_rel_fitness))+
+    scale_fill_gradient2(low = "dodgerblue4", 
+                         high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-5.1,3))+
+    scale_x_discrete(labels=label)+
+    theme(
+      axis.title.x = element_text(size=7),
+      axis.text.x = element_blank(),
+      axis.text.y=element_text(size = 7),
+      strip.text = element_text(size=8),
+      axis.ticks = element_blank(),
+      legend.key.size = unit(0.3, 'cm'),
+      legend.key.width = unit(0.4, 'cm'),
+      legend.title = element_text (size = 8),
+      legend.position = "none",
+      panel.background = element_blank())+
+    facet_nested(.~heterochromatic_region_label+medium, space = "free", scales = "free")+
+    ylab("")+
+    xlab(heterochromatin_screen_lft_mean_2 %>% 
+           filter(heterochromatic_region_label=="MAT", gene %in% top_mat ) %>% 
+           pull(n) %>% 
+           unique()),
+
+  # heterochromatin_screen_lft %>%
+  #   filter(heterochromatic_region_label=="subtelomere", gene %in% top_subtel_antis ) %>%
+  #   ggplot(aes(x=medium_rest_of_key, y=fct_reorder(gene, (URA_minus_FOA_score))))+
+  #   geom_tile(aes(fill=relative_fitness))+
+  #   scale_fill_gradient2(low = "dodgerblue4",
+  #                        high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-4,4))+
+  #   scale_x_discrete(labels=label)+
+  #   theme(axis.title.x = element_blank(),
+  #         axis.text.x = element_blank(),
+  #         axis.text.y=element_text(size = 7),
+  #         strip.text = element_text(size=8),
+  #         axis.ticks = element_blank(),
+  #         legend.key.size = unit(0.3, 'cm'),
+  #         legend.key.width = unit(0.4, 'cm'),
+  #         legend.title = element_text (size = 8),
+  #         legend.position = "none",
+  #         panel.background = element_blank(),
+  #         plot.margin = unit(c(0.2,0.2,1.5,0.2), "cm"))+
+  #   facet_nested(.~heterochromatic_region_label+medium, space = "free", scales = "free")+
+  #   ylab(""),
+
+  heterochromatin_screen_lft_mean_2 %>%
+    filter(heterochromatic_region_label=="TEL", gene %in% top_tel_antis )  %>%
+    ggplot(aes(x=rest_of_key, y=fct_reorder(gene, (URA_minus_FOA_score))))+
+    geom_tile(aes(fill=aggregated_rel_fitness))+
+    scale_fill_gradient2(low = "dodgerblue4", 
+                         high = "brown", midpoint = 0, na.value = "grey", mid = "white", limits=c(-5.1,3))+
+    scale_x_discrete(labels=label)+
+    labs(fill="relative\ngrowth")+
+    theme(
+      axis.title.x = element_text(size = 7),
+      axis.text.x = element_blank(),
+      axis.text.y=element_text(size = 7),
+      axis.ticks = element_blank(),
+      legend.key.size = unit(0.25, 'cm'),
+      legend.key.width = unit(0.25, 'cm'),
+      legend.title = element_text(size = 7),
+      legend.text = element_text(size=6),
+      strip.text = element_text(size=8),
+      panel.background = element_blank())+
+    facet_nested(.~heterochromatic_region_label+medium, space = "free", scales = "free")+
+    ylab("")+
+    xlab(heterochromatin_screen_lft_mean_2 %>% 
+           filter(heterochromatic_region_label=="TEL", gene %in% top_tel ) %>% 
+           pull(n) %>% 
+           unique()),
+  nrow = 1, widths = c(8,7.5,9.5), labels = "c")
+
+#print(plot_supplement)
+
+#ggsave("Figures/FigureS2_top20_antisilencing_100screens.pdf", width = 170, height = 70, units = "mm")
+
+
+
+
