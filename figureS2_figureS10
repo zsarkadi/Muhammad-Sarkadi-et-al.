@@ -1,0 +1,789 @@
+
+library(tidyverse)
+
+setwd("D:/documents/Heterochromatin_screen/analysis/Heterochromatin_screen_R/PUBLICATION")
+tbl_strain_wrong <- read_csv("gene_red_list_v3.csv")
+heterochromatin_screens_tbl <- read_csv("DataDerived/screens_100screens_S19_S30_removed.csv")
+known_HC_factors_tbl <- read_csv("known_silencing_and_antisilencing_factors_v4.csv") #RNAi factors chp1, tas3, dsh1, ers1, stc1 were removed from MAT, SUBTEL, TEL domains
+qPCR_ura4_tbl <- read_csv("data/qPCR_ura4.csv")
+#tbl_RT_2 <- read_csv("D:/documents/Heterochromatin_screen/analysis/Heterochromatin_screen_R/screen_data_RT_data_comparison/RT_qPCR_candidates_includingTERRA.csv")
+
+
+tbl_RT_all <- 
+
+bind_rows(
+
+tbl_RT_cen_dg <- readxl::read_excel("data/RT_candidates_all_20231014.xlsx", sheet ="cen-dg" ) %>%
+  select(c(1:8), -round) %>% 
+  mutate(`WT-fold`=as.double(`WT-fold`)),
+
+tbl_RT_imr <- readxl::read_excel("data/RT_candidates_all_20231014.xlsx", sheet ="IMR" ) %>%
+  select(c(1:8), -round)%>% 
+  mutate(`WT-fold`=as.double(`WT-fold`)),
+
+tbl_RT_mat <- readxl::read_excel("data/RT_candidates_all_20231014.xlsx", sheet ="mat" ) %>%
+  select(c(1:8), -round)%>% 
+  mutate(`WT-fold`=as.double(`WT-fold`)),
+
+tbl_RT_tlh <- readxl::read_excel("data/RT_candidates_all_20231014.xlsx", sheet ="tlh" ) %>%
+  select(c(1:8), -round)%>% 
+  mutate(`WT-fold`=as.double(`WT-fold`))
+
+)
+
+
+
+tbl_hits <- read_csv("DataDerived/hits_threshold_imr3_others_2point5.csv")
+
+# remove sap14 without star
+
+tbl_hits <- tbl_hits %>% 
+  filter(!gene %in% c("sap14"))
+
+
+# remove all stars
+
+tbl_hits$gene <- gsub("\\*$", "", tbl_hits$gene)
+
+tbl_hits$systematic_ID <- gsub("\\*$", "", tbl_hits$systematic_ID)
+
+######
+
+# #heterochromatin_screens_log2_tbl<-       heterochromatin_screens_tbl 
+## Ez a log transzformacioert felos resz
+heterochromatin_screens_log2_tbl<-
+  heterochromatin_screens_tbl %>%
+  mutate_at(.vars = setdiff(names(heterochromatin_screens_tbl), c("gene"  , "systematic_ID" )),
+            .funs = function(x)
+            {
+              y <- log2(x)
+              ifelse(is.finite(y), y, NA)
+            }
+  )
+colnames(heterochromatin_screens_log2_tbl)
+
+# clipr::write_clip(heterochromatin_screens_log2_tbl %>% 
+#   select(gene, contains("subtel")) %>% 
+#   filter(gene=="paf1"))
+
+#heterochromatin_screens_log2_tbl %>%filter(gene=="amo1") %>% t()
+#names(heterochromatin_screens_tbl)
+
+# long format table
+regexp1<-"^([^_]+)_([^_]+)_([^_]+)_([^_]+)_([^_]+)$"
+regexp2<-"^(.+)\\.([1234])$"
+heterochromatin_screen_lft<-heterochromatin_screens_log2_tbl %>% 
+  #select(-systematic_ID) %>% 
+  gather(key="key", value="relative_fitness",  -gene, -systematic_ID) %>% 
+  mutate(
+    heterochromatic_region=gsub(regexp1,"\\1", key),
+    medium=gsub(regexp1,"\\2", key),
+    rest_of_key=gsub(regexp1,"\\3_\\4_\\5", key)
+  ) %>% 
+  mutate(
+    technical_replicate_id=gsub(regexp2,"\\2", rest_of_key),
+    rest_of_key=gsub(regexp2,"\\1", rest_of_key)
+  ) %>% 
+  select(-key)
+
+
+stopifnot(all(grepl("^[1234]$",heterochromatin_screen_lft$technical_replicate_id)))  # each key ends with a dot and a number e.g.  ".1"
+
+
+##I take the mean of 2 technical replicates  of the same day
+heterochromatin_screen_lft<-
+  heterochromatin_screen_lft %>%
+  group_by( gene, systematic_ID, heterochromatic_region, medium, rest_of_key   ) %>% 
+  summarise(aggregated_rel_fitness=mean(relative_fitness, na.rm=TRUE), .groups="drop" ) 
+
+
+sd_tbl<-heterochromatin_screen_lft %>%
+  group_by( gene, systematic_ID, heterochromatic_region, medium  ) %>% 
+  summarise(mean_fitness= median(aggregated_rel_fitness, na.rm=TRUE), .groups="drop" ) %>%
+  group_by( heterochromatic_region, medium  ) %>% 
+  summarise(sd_of_fitness= sd(mean_fitness, na.rm=TRUE), mean_of_fitness= mean(mean_fitness, na.rm=TRUE) ,.groups="drop" )
+#write_csv(sd_tbl,"out/sd_tbl.csv")
+
+# long format table
+heterochromatin_screen_lft2<-
+  left_join(heterochromatin_screen_lft , sd_tbl, by = c("heterochromatic_region", "medium")) %>% 
+  mutate(scaled_fitness=(aggregated_rel_fitness-mean_of_fitness)/sd_of_fitness) %>%
+  #mutate(scaled_fitness=(aggregated_rel_fitness-mean_of_fitness)) %>% 
+  select(-aggregated_rel_fitness,-sd_of_fitness,-mean_of_fitness)
+
+
+###############
+my_t_test<-function(x)
+{ x<-x[is.finite(x)]
+if(length(x)>=2){
+  p<-t.test(x)$p.value
+}else{
+  p<-NA
+}
+return(p)
+}
+###############
+
+tbl1<-
+  heterochromatin_screen_lft2 %>%  spread(key="medium", value="scaled_fitness") %>%
+  mutate(score=URA-FOA) %>% 
+  group_by( gene, systematic_ID, heterochromatic_region) %>% 
+  summarise(p_value=my_t_test(score), 
+            URA_minus_FOA_score=median(score, na.rm=TRUE) ,
+            URA=median(URA, na.rm=TRUE),
+            FOA=median(FOA, na.rm=TRUE),
+            n= sum(is.finite(score)),
+            .groups="drop") %>% 
+  mutate(URA_minus_FOA_score=round(URA_minus_FOA_score, digits = 2))%>%
+  filter(!gene %in% c("swi6", "nup132", "met10", "sap14"))
+
+
+# filter out mutants that have lot of missing values
+
+tbl2 <- tbl1 %>% 
+  mutate(p_value=case_when(heterochromatic_region!="subtel" & n<3 ~0,
+                           TRUE~p_value))
+
+tbl2$p_value[tbl2$p_value == 0] <- NA
+
+
+#
+# I may ignore the stars in the gene name suffix
+tmp<-known_HC_factors_tbl %>%  
+  select(Gene, `Heterochromatin region`,`Silencing factor`,`Antisilencing factor`) %>% distinct() %>% rename(gene0=Gene) %>%
+  mutate(heterochromatic_region=case_when(`Heterochromatin region`=="cen"~"imr",
+                                          TRUE~`Heterochromatin region`))
+stopifnot(all(!grepl("\\*$",tmp$gene0)))  # ellenorzom, h az egyik gen nev vegen sincs csillag
+
+# tbl1 <- tbl2 %>% 
+#   filter(!gene %in% c("nup132", "swi6"))
+
+tmp_tbl2<-tbl2 %>% mutate(gene0=gsub("^([^*]+)\\*$","\\1", gene))  # remove * characters on the end of gene name
+
+tmp_tbl2<-bind_rows(
+  inner_join(tmp_tbl2, tmp, by = c("gene0", "heterochromatic_region"))%>% mutate(is_known_HC_factor=TRUE),
+  anti_join(tmp_tbl2, tmp, by = c("gene0", "heterochromatic_region"))%>% mutate(is_known_HC_factor=FALSE, `Silencing factor`=FALSE,`Antisilencing factor`=FALSE)
+) 
+
+tmp_tbl2$`Antisilencing factor` <- as.logical(tmp_tbl2$`Antisilencing factor`)
+tmp_tbl2$`Silencing factor` <- as.logical(tmp_tbl2$`Silencing factor`)
+
+tbl1<-tmp_tbl2 %>% 
+  select(-gene0)
+
+
+#########################
+# add qPCR_ura4 column
+
+tmp2<-left_join(tbl1, qPCR_ura4_tbl %>%  select(gene, heterochromatic_region,`ura4 mean`) %>% rename(qPCR_ura4=`ura4 mean`)) 
+stopifnot(nrow(tmp2)==nrow(tbl1))
+tbl1<-tmp2
+rm( tmp2)
+
+
+########
+
+recal_tbl<-tbl1 %>% filter(is_known_HC_factor) %>%  
+  arrange(heterochromatic_region,URA_minus_FOA_score) %>%
+  group_by(heterochromatic_region) %>% 
+  mutate(x=p_value<0.05) %>% 
+  mutate(cumsum_x=cumsum(x)) %>%
+  mutate(recall=(sum(x)-cumsum_x)/n()) %>% 
+  ungroup()
+
+
+############
+
+hit_cnt_tbl<-tbl1 %>% 
+  arrange(heterochromatic_region,desc(URA_minus_FOA_score)) %>%
+  group_by(heterochromatic_region) %>% 
+  mutate(x=(is.finite(p_value) & p_value<0.05)) %>% 
+  mutate(cumsum_x=cumsum(x)) %>%
+  mutate(hit_cnt=cumsum_x) %>% 
+  ungroup() %>% 
+  mutate(threshold=case_when(heterochromatic_region=="imr"~3,
+                             TRUE~2.5))
+
+################################
+threshold_versions <- c(2, 2.5, 3, 4)
+
+fix_treshold_tbl<-tibble()
+for(treshold in threshold_versions){
+  #treshold<-2
+  print(treshold)
+  tmp<-
+    tbl1 %>% 
+    mutate(hit=is.finite(p_value) & p_value<0.05 & URA_minus_FOA_score>=treshold  ) %>%   #& URA>0 & FOA<0
+    mutate(known_silencing_factor=case_when(`Silencing factor`==TRUE~TRUE,
+                                            TRUE~FALSE)) %>%
+    group_by(heterochromatic_region) %>%
+    summarise(hit_cnt=sum(hit),
+              hit_and_known_silencing_factor_cnt=sum(hit & known_silencing_factor),
+              number_of_known_silencing_factor=sum(known_silencing_factor),
+              recall=sum(known_silencing_factor & hit)/sum(known_silencing_factor),
+              recall_based_on_qPCR_ura4=sum(qPCR_ura4>1.5 & hit , na.rm=TRUE)/sum(qPCR_ura4>1.5 , na.rm=TRUE),
+              precision_based_on_qPCR_ura4=sum(qPCR_ura4>1.5 & hit , na.rm=TRUE)/sum(hit & is.finite(qPCR_ura4)),
+              hit_and_has_qPCR_ura4_cnt=sum(hit & is.finite(qPCR_ura4)),
+              not_hit_and_has_qPCR_ura4_cnt=sum(!hit & is.finite(qPCR_ura4)),
+              
+              hit_and_qPCR_ura4_big=sum(is.finite(qPCR_ura4) & qPCR_ura4>1.5 & hit),
+              hit_and_qPCR_ura4_small=sum(is.finite(qPCR_ura4) & qPCR_ura4<=1.5 & hit),
+              not_hit_and_qPCR_ura4_big=sum(is.finite(qPCR_ura4) & qPCR_ura4>1.5 & !hit),
+              not_hit_and_qPCR_ura4_small=sum(is.finite(qPCR_ura4) & qPCR_ura4<=1.5 & !hit)
+    ) %>% 
+    add_column(.before = 1,treshold=treshold)
+  fix_treshold_tbl<-bind_rows(fix_treshold_tbl,tmp)  
+}
+
+#write_csv(fix_treshold_tbl,"DataDerived//tresholds_tbl_100screens_v3.csv")
+
+my_colors<-c("antisilencing factor"="green", "silencing factor"="red", "no"="black"  )
+x_range<-range(tbl1$URA_minus_FOA_score, na.rm = TRUE)
+
+
+
+
+
+##################################################################################################################################################################################
+
+#################x plots for publication ###########################x
+
+
+tbl1_wo <- tbl1 %>% 
+  select(-is_known_HC_factor)
+
+
+library("scales")
+reverselog_trans <- function(base = 10) {
+  trans <- function(x) -log(x, base)
+  inv <- function(x) base^(-x)
+  trans_new(paste0("reverselog-", format(base)), trans, inv, 
+            log_breaks(base = base), 
+            domain = c(1e-100, Inf))
+}
+
+
+heterochromatin_screen_lft<-heterochromatin_screens_log2_tbl %>% 
+  select(-systematic_ID) %>% 
+  gather(key="key", value="relative_fitness",  -gene) %>% 
+  mutate(
+    heterochromatic_region=gsub(regexp1,"\\1", key),
+    medium=gsub(regexp1,"\\2", key),
+    medium_rest_of_key=gsub(regexp1,"\\2_\\3_\\4_\\5", key)) %>% 
+  mutate(heterochromatic_region_label=case_when(heterochromatic_region=="imr"~"pericentromere",
+                                                heterochromatic_region=="mat"~"mating type locus",
+                                                heterochromatic_region=="subtel"~"subtelomere",
+                                                heterochromatic_region=="tel"~"telomere"))
+
+# remove stars
+tbl1$gene <- gsub("swi6\\*", "swi6", tbl1$gene)
+tbl1$gene <- gsub("sap14\\*", "sap14", tbl1$gene)
+
+
+
+
+# number of hits
+tbl1 %>% 
+  filter(heterochromatic_region=="tel") %>% 
+  filter(p_value<0.05) %>% 
+  filter(URA_minus_FOA_score>=3) %>% 
+  pull(gene)
+
+#imr 53, mat 94, subtel 55, tel 49
+
+require(ggplot2)
+
+
+
+
+
+
+##############  Plots for publication: Figure S2 Threshold setting #########################
+
+
+my_colors2<-c("no"="grey" , "silencing factor"="red" )
+
+recal_tbl_v2<-tbl1 %>% filter(`Silencing factor`==TRUE) %>%  
+  arrange(heterochromatic_region,URA_minus_FOA_score) %>%
+  group_by(heterochromatic_region) %>% 
+  mutate(x=case_when(
+    heterochromatic_region=="imr" & p_value<0.05 & URA_minus_FOA_score>=3 ~TRUE,
+    heterochromatic_region!="imr" & p_value<0.05 & URA_minus_FOA_score>=2.5 ~TRUE,
+    TRUE~FALSE)) %>% 
+  mutate(cumsum_x=cumsum(x)) %>%
+  mutate(recall=(sum(x)-cumsum_x)/n()) %>% 
+  ungroup() %>% 
+  mutate(threshold=case_when(heterochromatic_region=="imr"~3,
+                             TRUE~2.5))
+
+tbl1_v2 <- tbl1 %>% 
+  mutate(label=case_when(heterochromatic_region=="imr"~"CEN",
+                         heterochromatic_region=="mat"~"MAT",
+                         heterochromatic_region=="subtel"~"SUBTEL",
+                         heterochromatic_region=="tel"~"TEL"))
+
+library(ggplot2)
+
+tbl1_v2 <- tbl1_v2 %>% 
+  mutate(is_known_HC_factor_2=case_when(is_known_HC_factor==TRUE~"silencing factor",
+                                        TRUE~"no")) %>% 
+  mutate(threshold=case_when(heterochromatic_region=="imr"~3,
+                             TRUE~2.5))
+
+p <- cowplot::plot_grid(
+  
+  tbl1_v2 %>%  ggplot(mapping = aes(x=URA_minus_FOA_score, y=p_value)) +
+    geom_point(data = tbl1_v2 %>%  filter(`Silencing factor`==FALSE), color="gray", size=0.2)+
+    geom_point(data = tbl1_v2 %>%  filter(`Silencing factor`==TRUE), color="red", size=0.5)+
+    #scale_color_manual(values = my_colors2)+
+    geom_hline(yintercept = 0.05, color="gray40", linetype="dashed")+
+    geom_vline(aes(xintercept = threshold), linetype="dashed", color="gray40")+
+    ggrepel::geom_text_repel(data = tbl1_v2 %>%  filter(`Silencing factor`==TRUE), mapping = aes(label=gene), color="red3", size=2,
+                             nudge_x = 0.1,  box.padding = 0.5, segment.colour = "red", segment.size = 0.1, max.overlaps = 100, min.segment.length = 0.1)+
+    scale_y_continuous(trans=reverselog_trans(10))+
+    facet_grid(.~factor(label, levels = 
+                          c("CEN", "MAT", "SUBTEL", "TEL")))+
+    theme(strip.text =  element_blank())+
+    theme_bw()+
+    theme(
+      legend.position = "none",
+      axis.title.x = element_blank(),
+      strip.text = element_text(size = 10)),
+  
+  recal_tbl_v2 %>% 
+    #add_row(heterochromatic_region="subtel") %>% 
+    ggplot(mapping = aes(x=URA_minus_FOA_score, y=recall)) +
+    geom_line() +
+    geom_vline(aes(xintercept =threshold), linetype="dashed", color="gray40")+
+    scale_x_continuous(limits = x_range)+
+    facet_grid(.~heterochromatic_region)+
+    theme_bw()+
+    theme(strip.text =  element_blank())+
+    theme(axis.title.x = element_blank()),
+  
+  hit_cnt_tbl %>%
+    ggplot(mapping = aes(x=URA_minus_FOA_score, y=hit_cnt)) +
+    geom_vline(aes(xintercept = threshold), linetype="dashed", color="gray40")+
+    geom_line() +
+    scale_x_continuous(limits = x_range)+
+    scale_y_continuous(limits = c(0,200))+
+    facet_grid(.~heterochromatic_region)+
+    theme_bw()+
+    theme(strip.text =  element_blank())+
+    xlab("combined FOA/URA score")+
+    ylab("number of hits"),
+  
+  
+  ncol=1,axis = "lr",align ="hv" , rel_heights = c(1.6,1,1), labels = c("a", "b", "c"))
+#ggsave(p, file= "Figures/treshold_recall_figS2_100screens_threshold3_2point5_v3.pdf", width = 170, height = 190, units = "mm")
+
+############################################################################################################################################################
+
+# RT list new by Abubakar (combined) #####
+
+# RT vs hits ####
+
+
+
+tbl_RT_all_mean <- tbl_RT_all %>% 
+  mutate(`gene name`=tolower(`gene name`)) %>% 
+  mutate(`gene name`=case_when(`gene name`=="fkbp39"~"ani1",
+                               TRUE~`gene name`)) %>%
+  select(`gene name`, ORF, `HC locus` ,`WT-fold`) %>%
+  group_by(`gene name`,ORF, `HC locus`) %>% 
+  summarize(mean_foldWT=mean(`WT-fold`, na.rm = TRUE))
+
+tbl_RT_all_mean_1 <- tbl_RT_all_mean %>% 
+  mutate(heterochromatic_region=case_when(`HC locus`%in% c("cen-dg", "IMR")~ "CEN",
+                                          `HC locus`=="mat3M"~ "MAT",
+                                          `HC locus`=="tlh"~"SUBTEL/TEL")) %>% 
+  mutate(RT_increased=case_when(mean_foldWT>=1.5~1,
+                                TRUE~0))
+# combine cen-dg/imr
+tbl_RT_all_mean_2 <- tbl_RT_all_mean_1 %>% 
+  select(-`HC locus`) %>% 
+  group_by(`gene name`, ORF, heterochromatic_region) %>% 
+  summarise(sum=sum(RT_increased)) %>%
+  mutate(RT_increased=case_when(sum>0~1,
+                                TRUE~0)) %>% 
+  select(-sum) %>% 
+  ungroup()
+
+tbl_hits <- tbl_hits %>% 
+  mutate(heterochromatic_region=case_when(heterochromatic_region %in% c("SUBTEL", "TEL")~"SUBTEL/TEL",
+                                          TRUE~heterochromatic_region)) %>% 
+  mutate(gene=tolower(gene))
+
+tbl_hits_simple <-  tbl_hits %>% 
+  select(gene, systematic_ID, heterochromatic_region, hit_silencing) %>% 
+  distinct() %>% 
+  group_by(gene, systematic_ID, heterochromatic_region) %>% 
+  summarise(hit_silencing=sum(hit_silencing)) %>% 
+  ungroup()
+
+tbl1 <- right_join(tbl_hits_simple, tbl_RT_all_mean_2 %>% select(-ORF) %>% rename(gene=`gene name`)) 
+
+tbl2 <- tbl1 %>% 
+  mutate(hit_and_RT_increased=case_when(hit_silencing==1 & RT_increased==1 ~ 1,
+                                        TRUE~0))
+
+write_csv(tbl2,"DataDerived/precision_20231016.csv")
+
+tbl3 <- tbl2 %>% 
+  #filter(hit_silencing==1) %>% 
+  select(-hit_and_RT_increased) %>% 
+  group_by(heterochromatic_region, hit_silencing, RT_increased) %>% 
+  summarise(n=n()) 
+
+#write_csv(tbl3,"DataDerived/precision_summary_20231016.csv")
+
+tbl4 <- tbl2 %>% 
+  filter(hit_silencing==1) %>%
+  group_by(heterochromatic_region) %>% 
+  mutate(n_mutant_RT_tested=n()) %>% 
+  ungroup() %>% 
+  select(-hit_and_RT_increased) %>% 
+  filter(RT_increased==1) %>% 
+  group_by(heterochromatic_region, hit_silencing, RT_increased, n_mutant_RT_tested) %>% 
+  summarise(hit_and_RT_increased=n()) %>% 
+  ungroup() %>% 
+  select(-hit_silencing , -RT_increased) %>% 
+  mutate(precision=hit_and_RT_increased/n_mutant_RT_tested)
+
+tbl2 %>% 
+  filter(hit_silencing==1) %>% 
+  pull(gene) %>% 
+  unique()
+# 80 genes, 53 are silencing hits
+
+
+
+tbl2 %>% 
+  filter(hit_silencing==1) %>% 
+  filter(RT_increased==1) %>% 
+  pull(gene) %>% 
+  unique()
+# 42
+
+# supplementary table 
+
+tbl_suppl <- left_join(tbl_RT_all_mean_1 %>% rename(gene=`gene name`) %>%
+                         rename(systematic_ID=ORF), 
+                       tbl_hits_simple)
+
+#write_csv(tbl_suppl,"DataDerived/precision_suppl_table_20231016.csv")
+
+# Fisher test ####
+
+# GO terms #####
+
+tbl_aa <- read_csv("data/amino acid metabolic process.csv")
+tbl_lipid <- read_csv("data/lipid metabolic process.csv")
+tbl_sulfur <- read_csv("data/sulfur compound metabolic process.csv")
+tbl_thiamine <- read_csv("data/thiamine biosynthetic process.csv")
+
+tbl_hits_GO <- tbl_hits %>% 
+  rename(`Systematic ID`=systematic_ID) %>% 
+  mutate("amino acid metabolic process"=case_when(`Systematic ID` %in% (tbl_aa %>% pull(`Systematic ID`))~1,
+                                                  TRUE~0)) %>% 
+  mutate("lipid metabolic process"=case_when(`Systematic ID` %in% (tbl_lipid %>% pull(`Systematic ID`))~1,
+                                                  TRUE~0)) %>% 
+  mutate("sulfur compound metabolic process"=case_when(`Systematic ID` %in% (tbl_sulfur %>% pull(`Systematic ID`))~1,
+                                             TRUE~0)) %>% 
+  mutate("thiamine biosynthetic process"=case_when(`Systematic ID` %in% (tbl_thiamine %>% pull(`Systematic ID`))~1,
+                                                       TRUE~0))
+
+#write_csv(tbl_hits_GO, "DataDerived/tbl_hits_GO_terms_metabolic_process.csv")
+
+
+
+# the same analysis with Group categories ####
+
+#tbl_groups <- read_csv("DataDerived/tbl_silencing_suppl_100screens_threshold_imr3_others_2point5.csv")
+
+tbl_clusters <- read_csv("DataDerived/tbl_silencing_suppl_100screens_threshold_imr3_others_2point5_clusters.csv")
+
+tbl_hits_GO <- tbl_clusters %>% 
+  rename(`Systematic ID`=systematic_ID) %>% 
+  mutate("amino acid metabolic process"=case_when(`Systematic ID` %in% (tbl_aa %>% pull(`Systematic ID`))~1,
+                                                  TRUE~0)) %>% 
+  mutate("lipid metabolic process"=case_when(`Systematic ID` %in% (tbl_lipid %>% pull(`Systematic ID`))~1,
+                                             TRUE~0)) %>% 
+  mutate("sulfur compound\nmetabolic process"=case_when(`Systematic ID` %in% (tbl_sulfur %>% pull(`Systematic ID`))~1,
+                                                       TRUE~0)) %>% 
+  mutate("thiamine biosynthetic process"=case_when(`Systematic ID` %in% (tbl_thiamine %>% pull(`Systematic ID`))~1,
+                                                   TRUE~0))
+
+#write_csv(tbl_hits_GO, "DataDerived/tbl_hits_GO_terms_metabolic_process_groups.csv")
+
+#amino acid metabolic process
+tbl_hits_GO %>% 
+  #filter(hit_silencing==1) %>% 
+  select(gene, cluster, `amino acid metabolic process`) %>% 
+  distinct() %>% 
+  mutate("Cluster V"=case_when(cluster=="Cluster V"~1,
+                                              TRUE~0)) %>%
+  select(-cluster) %>% 
+  group_by(`amino acid metabolic process`,`Cluster V`) %>% 
+  summarise(n=(n()))
+
+# `amino acid metabolic process` `Cluster V`     n
+# <dbl>       <dbl> <int>
+#   1                              0           0   137
+# 2                              0           1    24
+# 3                              1           0     5
+# 4                              1           1    14
+
+tbl_aa_fisher <- tbl_hits_GO %>% 
+  #filter(hit_silencing==1) %>% 
+  select(gene, cluster, `amino acid metabolic process`) %>% 
+  distinct() %>% 
+  mutate("Cluster V"=case_when(cluster=="Cluster V"~1,
+                               TRUE~0)) %>%
+  select(-cluster)
+
+
+test <- fisher.test(x=tbl_aa_fisher$`Cluster V`,
+                    y=tbl_aa_fisher$`amino acid metabolic process`)
+
+# p-value = 2.112e-07
+# alternative hypothesis: true odds ratio is not equal to 1
+# 95 percent confidence interval:
+#   4.776721 60.690119
+# sample estimates:
+#   odds ratio 
+# 15.59936 
+
+tbl_aa_2 <- tbl_clusters %>% 
+  rename(`Systematic ID`=systematic_ID) %>% 
+  mutate("biological process"=case_when(`Systematic ID` %in% (tbl_aa %>% pull(`Systematic ID`))~"amino acid metabolic process",
+                                        TRUE~"other")) %>%  
+  #filter(hit_silencing==1) %>% 
+  select(gene, cluster, `biological process`) %>% 
+  distinct() %>% 
+  mutate("Cluster V"=case_when(cluster=="Cluster V"~"Cluster V",
+                               TRUE~"other"))
+tbl_aa_3 <- tbl_aa_2 %>% 
+  group_by(`biological process`, `Cluster V`) %>% 
+  summarize(n=n())
+  
+
+plot_aa <- tbl_aa_3 %>% 
+  ggplot(aes(x=`Cluster V`,y=n, fill=`biological process`))+
+  geom_col() +
+  geom_text(aes(label=n), position=position_stack(vjust = .5), size=2.5)+
+  theme_bw()+
+  theme(axis.title.y = element_blank(),
+        legend.title = element_blank(),
+        #legend.position = "bottom",
+        text = element_text(size=6),
+        legend.text = element_text(size=6),
+        axis.title.x = element_blank(),
+        title = element_text(size=6))+
+  labs(title=paste("Fisher's exact test\np-value=",round(test$p.value,digits = 7) ,"\nodds ratio=" ,round(test$estimate, digits = 2)))
+
+#lipid metabolic process
+tbl_hits_GO %>% 
+  #filter(hit_silencing==1) %>% 
+  select(gene, cluster, `lipid metabolic process`) %>% 
+  distinct() %>% 
+  mutate("Cluster V"=case_when(cluster=="Cluster V"~1,
+                               TRUE~0))%>% 
+  select(-cluster) %>% 
+  group_by(`lipid metabolic process`,`Cluster V`) %>% 
+  summarise(n=(n()))
+
+# `lipid metabolic process` `Cluster V`     n
+# <dbl>       <dbl> <int>
+#   1                         0           0   138
+# 2                         0           1    34
+# 3                         1           0     4
+# 4                         1           1     4
+
+tbl_lipid_fisher <- tbl_hits_GO %>% 
+  #filter(hit_silencing==1) %>% 
+  select(gene, cluster, `lipid metabolic process`) %>% 
+  distinct() %>% 
+  mutate("Cluster V"=case_when(cluster=="Cluster V"~1,
+                               TRUE~0))%>% 
+  select(-cluster)
+
+
+test <- fisher.test(x=tbl_lipid_fisher$`Cluster V`,
+                    y=tbl_lipid_fisher$`lipid metabolic process`)
+
+# p-value = 0.06265
+# alternative hypothesis: true odds ratio is not equal to 1
+# 95 percent confidence interval:
+#   0.7104701 22.7405578
+# sample estimates:
+#   odds ratio 
+# 4.017123  
+
+tbl_lipid_2 <- tbl_clusters %>% 
+  rename(`Systematic ID`=systematic_ID) %>% 
+  mutate("biological process"=case_when(`Systematic ID` %in% (tbl_lipid %>% pull(`Systematic ID`))~"lipid metabolic process",
+                                        TRUE~"other")) %>%  
+  #filter(hit_silencing==1) %>% 
+  select(gene, cluster, `biological process`) %>% 
+  distinct() %>% 
+  mutate("Cluster V"=case_when(cluster=="Cluster V"~"Cluster V",
+                               TRUE~"other")) 
+
+tbl_lipid_3 <- tbl_lipid_2 %>% 
+  group_by(`biological process`, `Cluster V`) %>% 
+  summarize(n=n())
+
+
+plot_lipid <- tbl_lipid_3 %>% 
+  ggplot(aes(x=`Cluster V` ,y=n, fill=`biological process`))+
+  geom_col() +
+  geom_text(aes(label=n), position=position_stack(vjust = .5), size=2.5)+
+  theme_bw()+
+  theme(axis.title.y = element_blank(),
+        legend.title = element_blank(),
+        #legend.position = "bottom",
+        text = element_text(size=6),
+        legend.text = element_text(size=6),
+        axis.title.x = element_blank(),
+        title = element_text(size=6))+
+  labs(title=paste("Fisher's exact test\np-value=",round(test$p.value,digits = 5) ,"\nodds ratio=" ,round(test$estimate, digits = 2)))
+
+#sulfur metabolic process
+tbl_hits_GO %>% 
+  #filter(hit_silencing==1) %>% 
+  select(gene, cluster, `sulfur compound\nmetabolic process`) %>% 
+  distinct() %>% 
+  mutate("Cluster V"=case_when(cluster=="Cluster V"~1,
+                               TRUE~0)) %>% 
+  select(-cluster) %>% 
+  group_by(`sulfur compound\nmetabolic process`,`Cluster V`) %>% 
+  summarise(n=(n()))
+
+# `sulfur compound\nmetabolic process` `Cluster V`     n
+# <dbl>       <dbl> <int>
+#   1                                    0           0   138
+# 2                                    0           1    28
+# 3                                    1           0     4
+# 4                                    1           1    10
+
+tbl_sulfur_fisher <- tbl_hits_GO %>% 
+  #filter(hit_silencing==1) %>% 
+  select(gene, cluster, `sulfur compound\nmetabolic process`) %>% 
+  distinct() %>% 
+  mutate("Cluster V"=case_when(cluster=="Cluster V"~1,
+                               TRUE~0)) %>% 
+  select(-cluster) 
+
+
+test <- fisher.test(x=tbl_sulfur_fisher$`Cluster V`,
+                    y=tbl_sulfur_fisher$`sulfur compound\nmetabolic process`)
+
+# p-value = 3.229e-05
+# alternative hypothesis: true odds ratio is not equal to 1
+# 95 percent confidence interval:
+#   3.203359 56.556709
+# sample estimates:
+#   odds ratio 
+# 12.06313 
+
+tbl_sulfur_2 <- tbl_clusters %>% 
+  rename(`Systematic ID`=systematic_ID) %>% 
+  mutate("biological process"=case_when(`Systematic ID` %in% (tbl_sulfur %>% pull(`Systematic ID`))~"sulfur compound\nmetabolic process",
+                                        TRUE~"other")) %>%  
+  #filter(hit_silencing==1) %>% 
+  select(gene, cluster, `biological process`) %>% 
+  distinct() %>% 
+  mutate("Cluster V"=case_when(cluster=="Cluster V"~"Cluster V",
+                               TRUE~"other")) 
+tbl_sulfur_3 <- tbl_sulfur_2 %>% 
+  group_by(`biological process`, `Cluster V`) %>% 
+  summarize(n=n())
+
+
+plot_sulfur <- tbl_sulfur_3 %>% 
+  mutate(`biological process`=factor(`biological process`, levels=c("sulfur compound\nmetabolic process", "other"))) %>% 
+  ggplot(aes(x=`Cluster V`,y=n, fill=`biological process`))+
+  geom_col() +
+  geom_text(aes(label=n), position=position_stack(vjust = .5), size=2.5)+
+  theme_bw()+
+  theme(axis.title.y = element_blank(),
+        legend.title = element_blank(),
+        #legend.position = "bottom",
+        text = element_text(size=6),
+        legend.text = element_text(size=6),
+        axis.title.x = element_blank(),
+        title = element_text(size=6))+
+  labs(title=paste("Fisher's exact test\np-value=",round(test$p.value,digits = 5) ,"\nodds ratio=" ,round(test$estimate, digits = 2)))
+
+#thiamine biosynthetic process
+tbl_hits_GO %>% 
+  #filter(hit_silencing==1) %>% 
+  select(gene, cluster, `thiamine biosynthetic process`) %>% 
+  distinct() %>% 
+  mutate("Cluster V"=case_when(cluster=="Cluster V"~1,
+                               TRUE~0)) %>% 
+  select(-cluster) %>% 
+  group_by(`thiamine biosynthetic process`,`Cluster V`) %>% 
+  summarise(n=(n()))
+
+# `thiamine biosynthetic process` `Cluster V`     n
+# <dbl>       <dbl> <int>
+#   1                               0           0   142
+# 2                               0           1    35
+# 3                               1           1     3
+
+
+tbl_thiamine_fisher <- tbl_hits_GO %>% 
+  #filter(hit_silencing==1) %>% 
+  select(gene, cluster, `thiamine biosynthetic process`) %>% 
+  distinct() %>% 
+  mutate("Cluster V"=case_when(cluster=="Cluster V"~1,
+                               TRUE~0)) %>% 
+  select(-cluster) 
+
+
+test <- fisher.test(x=tbl_thiamine_fisher$`Cluster V`,
+                    y=tbl_thiamine_fisher$`thiamine biosynthetic process`)
+
+# p-value = 0.008826
+# alternative hypothesis: true odds ratio is not equal to 1
+# 95 percent confidence interval:
+#   1.59107     Inf
+# sample estimates:
+#   odds ratio 
+# Inf  
+
+tbl_thiamine_2 <- tbl_clusters %>% 
+  rename(`Systematic ID`=systematic_ID) %>% 
+  mutate("biological process"=case_when(`Systematic ID` %in% (tbl_thiamine %>% pull(`Systematic ID`))~"thiamine biosynthetic process",
+                                        TRUE~"other")) %>%  
+  #filter(hit_silencing==1) %>% 
+  select(gene, cluster, `biological process`) %>% 
+  distinct() %>% 
+  mutate("Cluster V"=case_when(cluster=="Cluster V"~"Cluster V",
+                               TRUE~"other")) 
+
+tbl_thiamine_3 <- tbl_thiamine_2 %>% 
+  group_by(`biological process`, `Cluster V`) %>% 
+  summarize(n=n())
+
+
+
+plot_thiamine <- tbl_thiamine_3 %>% 
+  mutate(`biological process`=factor(`biological process`, levels=c("thiamine biosynthetic process", "other"))) %>% 
+  ggplot(aes(x=`Cluster V`,y=n, fill=`biological process`))+
+  geom_col() +
+  geom_text(aes(label=n), position=position_stack(vjust = .5), size=2.5)+
+  theme_bw()+
+  theme(axis.title.y = element_blank(),
+        legend.title = element_blank(),
+        #legend.position = "bottom",
+        text = element_text(size=6),
+        legend.text = element_text(size=6),
+        axis.title.x = element_blank(),
+        title = element_text(size=6))+
+  labs(title=paste("Fisher's exact test\np-value=",round(test$p.value,digits = 5) ,"\nodds ratio=" ,round(test$estimate, digits = 2)))
+
+cowplot::plot_grid(plot_aa, plot_lipid, plot_sulfur, plot_thiamine, align = "hv")
+#ggsave("Figures/fisher_test_clusters.pdf", height = 110, width = 150, units = "mm")
