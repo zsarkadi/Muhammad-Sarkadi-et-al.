@@ -1,0 +1,115 @@
+# Name: Thomas van Emden
+# Data: September 11, 2019
+# Use this script to combine the results of many screens in one dataframe, for example to 
+# make a heatmap
+
+##### Setup ####
+# Load packages
+library(ggdendro)
+library(reshape2)
+library(ggplot2)
+
+# Clean Global Environment
+rm(list = ls())
+
+#### Vlookup #####
+# First load the sample table and select the screens you want to combine
+# Loading of sample table 
+sampleTable <- read.csv("SampleTable.csv", header = TRUE, stringsAsFactors = FALSE, comment.char = "#", sep = ",")
+# Selection of screen you want to combine
+sampleTable <- subset(sampleTable, exclude != "x")
+sampleTable <- subset(sampleTable, mutant != "221.alp13" & mutant != "113.pop2" & mutant != "211.ckb1" & mutant != "231.clr2")
+sampleTable <- subset(sampleTable, type == "imr" | type == "mat" | type == "tel")
+sampleTable <- subset(sampleTable, experimentor != "magdalena" & experimentor != "paula")
+sampleTable <- subset(sampleTable, preferenceDay == "x")
+sampleTable <- subset(sampleTable, analyzed == "x")
+sampleTable <- subset(sampleTable, mutant != "001.wt")
+
+sampleTable <- subset(sampleTable, experimentor == "abubakar")
+sampleTable <- subset(sampleTable, assay_stress == "01.std")
+ 
+# Load the gene list to which all screens are merged
+genelist <- read.csv("data/plateInfo/genelist.csv")
+genelist <- genelist[-c(2:4)]
+
+# Merge the results of all your screens using this for loop:
+for (i in 1:nrow(sampleTable)){
+  # Get the info needed from the sample table
+  data_path <- as.character(sampleTable$location_results[i])
+  screenName <- as.character(sampleTable$screen_name[i])
+  print(screenName)
+  type <- as.character(sampleTable$type[i])
+  mutant <- as.character(sampleTable$mutant[i])
+  assay_stress <- as.character(sampleTable$assay_stress[i])
+  media1 <- as.character(sampleTable$media1[i])
+  media2 <- as.character(sampleTable$media2[i])
+  media3 <- as.character(sampleTable$media3[i])
+  media4 <- as.character(sampleTable$media4[i])
+  media5 <- as.character(sampleTable$media5[i])
+  media <- as.numeric(sampleTable$types_media[i])
+
+  # Open individual files
+  filez <- read.csv(paste0(sampleTable$location_results[i],"/",screenName, "_filtered_100.txt"), header = TRUE, stringsAsFactors = FALSE, sep = "\t")
+  filez <- subset(filez, filez$gene != "#N/A")
+
+  for (j in 2:media){
+    coltomerge <- as.character(paste(type, get(paste0("media", j)), mutant, assay_stress,screenName, sep = "_"))
+    genelist <- merge(genelist, filez[ , c("gene", coltomerge )], all.x = TRUE)
+  }
+} 
+
+# How you wanna have the screens sorted in the final matix?
+first <- "media"
+second <- "type"
+third <- "mutant"
+fourth <- "assay_stress"
+
+m <- names(genelist[-1])
+r <- strsplit(m, "_")
+q <- data.frame(matrix(unlist(r),nrow=length(m),byrow=T))
+colnames(q) <- c("type", "media", "mutant", "assay_stress" ,"screenname")
+q <- q[order(q[first], q[second], q[third], q[fourth]),]
+m <- paste0(q$type,"_",q$media, "_", q$mutant,"_",q$assay_stress, "_", q$screenname )
+
+orderedGenelist <- genelist[,c("gene",m)]
+otter.matrix <- as.matrix(orderedGenelist[, -c(1)])
+rownames(otter.matrix) <- orderedGenelist$gene
+
+# Basically the cluster3 stuff
+otter.matrix <- otter.matrix[rowSums(is.na(otter.matrix)) <= 0.2 * ncol(otter.matrix), ]
+otter.matrix <- log2(otter.matrix)
+otter.matrix[otter.matrix == -Inf] <- NA
+otter.matrix <- as.data.frame(otter.matrix[rowSums(abs(otter.matrix), na.rm = TRUE) >= 0.7*ncol(otter.matrix),])
+d <- dist((otter.matrix))   # find distance matrix 
+hc <- hclust(d)                # apply hirarchical clustering 
+
+otter.dendro <- as.dendrogram(hc)
+#dendro.plot <- ggdendrogram(data = otter.dendro, rotate = TRUE)
+#print(dendro.plot)
+
+otter.matrix$gene <- rownames(otter.matrix)
+otter.long <- melt(otter.matrix, id.vars = "gene")
+
+otter.order <- order.dendrogram(otter.dendro)
+otter.long$gene <- factor(x = otter.long$gene,
+                          levels = otter.matrix$gene[otter.order], 
+                          ordered = TRUE)
+
+heatmap.plot <- ggplot(data = otter.long, aes(x = variable, y = gene)) +
+  geom_tile(aes(fill = value)) +
+  scale_fill_gradient2(low = "blue", high = "yellow") +
+  theme(
+    #axis.text.y = element_text(size = 6),
+    #axis.text = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+print(heatmap.plot)
+
+# And finally create a .txt file that you can use for cluster and Treeview
+fileName <- "IMRScreensDay2"
+write.table(sampleTable$screen_name, paste0("data/forClusterTreeview/", format(Sys.time(), "%y%m%d"), "_", fileName,".logfile"), sep="\t", row.names=F )
+write.table(genelist, paste0("data/forClusterTreeview/", format(Sys.time(), "%y%m%d"),"_", fileName, ".txt"), sep="\t", row.names=F)
+
+
+
